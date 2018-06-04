@@ -6,14 +6,8 @@ tags = ["Hello World"]
 
 This is `/dev/random`.
 
-A biased quantum-based random generator (my brain).
-
-Test update here
+Some random bits from a biased quantum-based random generator, or so-called my brain.
 
 <!-- more -->
-Test
 
-Test more
-## Test
-Test more more
-More
+Got ya, that's all of it.
