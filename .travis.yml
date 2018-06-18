@@ -15,3 +15,6 @@ deploy:
   target-branch: master
   on:
     branch: source
+branches:
+  only:
+  - source
