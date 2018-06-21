@@ -1,7 +1,7 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     
         <url>
-            <loc>http://dev-random.io/my-blog/</loc>
+            <loc>https://dev-random.io/my-blog/</loc>
             
                 <lastmod>2018-06-20</lastmod>
             
@@ -9,29 +9,29 @@
     
     
         <url>
-            <loc>http://dev-random.io/</loc>
+            <loc>https://dev-random.io/</loc>
         </url>
     
     
         <url>
-            <loc>http://dev-random.io/categories/</loc>
+            <loc>https://dev-random.io/categories/</loc>
         </url>
     
     
         <url>
-            <loc>http://dev-random.io/tags/</loc>
+            <loc>https://dev-random.io/tags/</loc>
         </url>
     
         <url>
-            <loc>http://dev-random.io/tags/ci/</loc>
+            <loc>https://dev-random.io/tags/ci/</loc>
         </url>
     
         <url>
-            <loc>http://dev-random.io/tags/hello-world/</loc>
+            <loc>https://dev-random.io/tags/hello-world/</loc>
         </url>
     
         <url>
-            <loc>http://dev-random.io/tags/static-page/</loc>
+            <loc>https://dev-random.io/tags/static-page/</loc>
         </url>
     
 </urlset>
