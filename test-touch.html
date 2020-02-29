@@ -25,7 +25,7 @@
       document.addEventListener("DOMContentLoaded", startup);
       var ongoingTouches = [];
       var countEvents = 0;
-      var lastTime = Date.getTime();
+      var lastTime = Date.now();
       var maxCount = 0;
 
       function handleStart(evt) {
@@ -51,8 +51,8 @@
         var el = document.getElementById("canvas");
         var ctx = el.getContext("2d");
         var touches = evt.changedTouches;
-        countEvents = countEvents + 1;
-        var curTime = Date.getTime();
+        countEvents++;
+        var curTime = Date.now();
         if (curTime - lastTime > 1000) {
           if (maxCount < countEvents / (curTime - lastTime)) {
             maxCount = countEvents / (curTime - lastTime);
