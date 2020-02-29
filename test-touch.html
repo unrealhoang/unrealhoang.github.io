@@ -51,14 +51,15 @@
         var el = document.getElementById("canvas");
         var ctx = el.getContext("2d");
         var touches = evt.changedTouches;
-        countEvents += 1;
+        countEvents = countEvents + 1;
         var curTime = Date.getTime();
         if (curTime - lastTime > 1000) {
-          if (maxCount < countEvents) {
-            maxCount = countEvents;
-            log("Max count updated: " + maxCount);
+          if (maxCount < countEvents / (curTime - lastTime)) {
+            maxCount = countEvents / (curTime - lastTime);
+            log("Max rate updated: " + maxCount);
           }
           countEvents = 0;
+          lastTime = curTime;
         }
 
         for (var i = 0; i < touches.length; i++) {
