@@ -43,7 +43,7 @@
         if (this.end_at != null) { return; }
 
         var time_diff = Date.now() - this.start_at;
-        var point = Point(x, y, time_diff, force);
+        var point = new Point(x, y, time_diff, force);
         this.points.push(point);
       };
 
@@ -77,7 +77,7 @@
 
         for (var i = 0; i < touches.length; i++) {
           console.log("touchstart:" + i + "...");
-          stroke = Stroke(touches[i].identifier);
+          var stroke = new Stroke(touches[i].identifier);
           var force = (touches[i].force != undefined) ? touches[i].force : 0;
           stroke.addPoint(touches[i].pageX, touches[i].pageY, force);
           ongoingStroke.push(stroke);
