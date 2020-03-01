@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+
+    <title>Touch events - Example - code sample</title>
+  </head>
+  <body>
+
+    <canvas id="canvas" width="600" height="600" style="border:solid black 1px;">
+      Your browser does not support canvas element.
+    </canvas>
+    <br>
+    Log: <pre id="log" style="border: 1px solid #ccc;"></pre>
+
+    <script>
+      function startup() {
+        var el = document.getElementById("canvas");
+        el.addEventListener("touchstart", handleStart, false);
+        el.addEventListener("touchend", handleEnd, false);
+        el.addEventListener("touchcancel", handleCancel, false);
+        el.addEventListener("touchmove", handleMove, false);
+      }
+
+      document.addEventListener("DOMContentLoaded", startup);
+      var ongoingStroke = [];
+      var countEvents = 0;
+      var lastTime = Date.now();
+      var maxCount = 0;
+      var events = []
+      function Point(x, y, time_diff, force) {
+        this.data = Uint16Array.of(x, y, time_diff, force * 65535);
+      }
+
+      function Stroke(id) {
+        this.id = id;
+        this.start_at = Date.now();
+        this.end_at = null;
+        this.points = []
+      }
+
+      Stroke.prototype.addPoint = function(x, y, force) {
+        if (this.end_at != null) { return; }
+
+        var time_diff = Date.now() - this.start_at;
+        var point = Point(x, y, time_diff, force);
+        this.points.push(point);
+      };
+
+      Stroke.prototype.end = function() {
+        this.end_at = Date.now();
+      };
+
+      Stroke.prototype.serialize = function() {
+        // 4 for start_at, 4 * points
+        var size = 4 + 4 * this.points.length;
+        var result = new Uint16Array(size);
+        var start_at_buf = new Uint16Array(BigUint64Array.of(BigInt(Date.now())).buffer);
+        result.set(start_at_buf, 0);
+        return result;
+      }
+
+      Stroke.prototype.lastX = function() {
+        return this.points.slice(-5, -4)[0];
+      }
+
+      Stroke.prototype.lastY = function() {
+        return this.points.slice(-4, -3)[0];
+      }
+
+      function handleStart(evt) {
+        evt.preventDefault();
+        console.log("touchstart.");
+        var el = document.getElementById("canvas");
+        var ctx = el.getContext("2d");
+        var touches = evt.changedTouches;
+
+        for (var i = 0; i < touches.length; i++) {
+          console.log("touchstart:" + i + "...");
+          stroke = new Stroke(touches[i].identifier);
+          var force = (touches[i].force != undefined) ? touches[i].force : 0;
+          stroke.addPoint(touches[i].pageX, touches[i].pageY, force);
+          ongoingStroke.push(stroke);
+          var color = colorForTouch(touches[i]);
+          ctx.beginPath();
+          ctx.arc(touches[i].pageX, touches[i].pageY, 4, 0, 2 * Math.PI, false);  // a circle at the start
+          ctx.fillStyle = color;
+          ctx.fill();
+          console.log("touchstart:" + i + ".");
+        }
+      }
+      function handleMove(evt) {
+        evt.preventDefault();
+        var el = document.getElementById("canvas");
+        var ctx = el.getContext("2d");
+        var touches = evt.changedTouches;
+        countEvents++;
+        var curTime = Date.now();
+        if (curTime - lastTime > 1000) {
+          if (maxCount < countEvents / (curTime - lastTime)) {
+            maxCount = countEvents / (curTime - lastTime);
+            log("Max rate updated: " + maxCount);
+          }
+          countEvents = 0;
+          lastTime = curTime;
+        }
+
+        for (var i = 0; i < touches.length; i++) {
+          var color = colorForTouch(touches[i]);
+          var idx = ongoingStrokeById(touches[i].identifier);
+
+          if (idx >= 0) {
+            console.log("continuing touch "+idx);
+            ctx.beginPath();
+            ctx.moveTo(ongoingStroke[idx].lastX(), ongoingStroke[idx].lastY());
+            ctx.lineTo(touches[i].pageX, touches[i].pageY);
+            ctx.lineWidth = 4;
+            ctx.strokeStyle = color;
+            ctx.stroke();
+
+            var force = (touches[i].force != undefined) ? touches[i].force : 0;
+            ongoingStroke[idx].addPoint(touches[i].pageX, touches[i].pageY, force);
+          } else {
+            console.log("can't figure out which touch to continue");
+          }
+        }
+      }
+      function handleEnd(evt) {
+        evt.preventDefault();
+        log("touchend");
+        var el = document.getElementById("canvas");
+        var ctx = el.getContext("2d");
+        var touches = evt.changedTouches;
+
+        for (var i = 0; i < touches.length; i++) {
+          var color = colorForTouch(touches[i]);
+          var idx = ongoingStrokeById(touches[i].identifier);
+
+          if (idx >= 0) {
+            ctx.lineWidth = 4;
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.moveTo(ongoingStroke[idx].lastX(), ongoingStroke[idx].lastY());
+            ctx.lineTo(touches[i].pageX, touches[i].pageY);
+            ctx.fillRect(touches[i].pageX - 4, touches[i].pageY - 4, 8, 8);  // and a square at the end
+            var stroke = ongoingStroke.splice(idx, 1)[0];  // remove it; we're done
+            stroke.end();
+            log("Deleted: " + stroke.serialize().slice(0, 10));
+          } else {
+            console.log("can't figure out which touch to end");
+          }
+        }
+      }
+      function handleCancel(evt) {
+        evt.preventDefault();
+        console.log("touchcancel.");
+        var touches = evt.changedTouches;
+
+        for (var i = 0; i < touches.length; i++) {
+          var idx = ongoingStrokeById(touches[i].identifier);
+          var stroke = ongoingStroke.splice(idx, 1)[0];  // remove it; we're done
+          stroke.end();
+          log("Deleted: " + stroke.serialize().slice(0, 10));
+        }
+      }
+      function colorForTouch(id) {
+        var r = id % 16;
+        var g = Math.floor(id / 3) % 16;
+        var b = Math.floor(id / 7) % 16;
+        r = r.toString(16); // make it a hex digit
+        g = g.toString(16); // make it a hex digit
+        b = b.toString(16); // make it a hex digit
+        var color = "#" + r + g + b;
+        console.log("color for touch with identifier " + id + " = " + color);
+        return color;
+      }
+
+      function ongoingStrokeById(idToFind) {
+        for (var i = 0; i < ongoingStroke.length; i++) {
+          var id = ongoingStroke[i].id;
+
+          if (id == idToFind) {
+            return i;
+          }
+        }
+        return -1;    // not found
+      }
+      function log(msg) {
+        var p = document.getElementById('log');
+        p.innerHTML = msg + "\n" + p.innerHTML;
+      }
+    </script>
+
+  </body>
+</html>
