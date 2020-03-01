@@ -28,6 +28,20 @@
       var lastTime = Date.now();
       var maxCount = 0;
       var events = []
+
+      function timeToUint64(time) {
+        // new Uint16Array(BigUint64Array.of(BigInt(time)).buffer);
+        var r = new Uint16Array(4);
+        // time << 32
+        r[2] = (time / 4294967296) | 0;
+        // time << 16 & (2^16-1)
+        r[1] = (time / 65536) & 65535;
+        // time & (2^16-1)
+        r[0] = time & 65535;
+
+        return r;
+      }
+
       function Point(x, y, time_diff, force) {
         this.data = Uint16Array.of(x, y, time_diff, force * 65535);
       }
@@ -55,7 +69,8 @@
         // 4 for start_at, 4 * points
         var size = 4 + 4 * this.points.length;
         var result = new Uint16Array(size);
-        var start_at_buf = new Uint16Array(BigUint64Array.of(BigInt(Date.now())).buffer);
+
+        var start_at_buf = timeToUint64(this.start_at);
         result.set(start_at_buf, 0);
         for (var i = 0; i < this.points.length; i++) {
           result.set(this.points[i].data, (i + 1) * 4);
@@ -130,14 +145,15 @@
       }
       function handleEnd(evt) {
         evt.preventDefault();
-        log("touchend");
         var el = document.getElementById("canvas");
         var ctx = el.getContext("2d");
         var touches = evt.changedTouches;
+        log("touchend: " + touches.length);
 
         for (var i = 0; i < touches.length; i++) {
           var color = colorForTouch(touches[i]);
           var idx = ongoingStrokeById(touches[i].identifier);
+          log("idx: " + idx);
 
           if (idx >= 0) {
             ctx.lineWidth = 4;
@@ -147,8 +163,11 @@
             ctx.lineTo(touches[i].pageX, touches[i].pageY);
             ctx.fillRect(touches[i].pageX - 4, touches[i].pageY - 4, 8, 8);  // and a square at the end
             var stroke = ongoingStroke.splice(idx, 1)[0];  // remove it; we're done
+            var force = (touches[i].force != undefined) ? touches[i].force : 0;
+            stroke.addPoint(touches[i].pageX, touches[i].pageY, force);
             stroke.end();
-            log("Deleted: " + stroke.serialize().slice(0, 10));
+            var t = stroke.serialize();
+            log("Deleted: " + t.slice(0, 12) + " size: " + t.length);
           } else {
             console.log("can't figure out which touch to end");
           }
@@ -163,7 +182,8 @@
           var idx = ongoingStrokeById(touches[i].identifier);
           var stroke = ongoingStroke.splice(idx, 1)[0];  // remove it; we're done
           stroke.end();
-          log("Deleted: " + stroke.serialize().slice(0, 10));
+          var t = stroke.serialize();
+          log("Deleted: " + t.slice(0, 12) + " size: " + t.length);
         }
       }
       function colorForTouch(id) {
