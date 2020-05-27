@@ -52,20 +52,20 @@ what I did, and it caused some confusions for me.
 After that, put `.travis.yml` file into your project with following content:
 
 ```yaml
-# Only build from `source` branch
+language: minimal
+
 branches:
   only:
   - source
 
 before_script:
-  # Download and unzip the gutenberg executable
+  # Download and unzip the zola executable
   # Replace the version numbers in the URL by the version you want to use
-  - curl -s -L https://github.com/Keats/gutenberg/releases/download/v0.3.3/gutenberg-v0.3.3-x86_64-unknown-linux-gnu.tar.gz | sudo tar xvzf - -C /usr/local/bin
+  - curl -s -L https://github.com/getzola/zola/releases/download/v0.11.0/zola-v0.11.0-x86_64-unknown-linux-gnu.tar.gz | sudo tar xvzf - -C /usr/local/bin
 
 script:
-  - gutenberg build
+  - zola build
 
-# Deployment config, full explanation here: https://docs.travis-ci.com/user/deployment/pages/
 deploy:
   provider: pages
   skip-cleanup: true
