@@ -1,5 +1,3 @@
-
-
 <!DOCTYPE html>
 <html lang="en">
     <head>
@@ -14,7 +12,7 @@
       
 
       
-          <link rel="stylesheet" href="https:&#x2F;&#x2F;dev-random.io&#x2F;site.css">
+          <link rel="stylesheet" href="https://dev-random.io/site.css">
       
 
       
@@ -23,6 +21,35 @@
 
     <body class="hack dark main container">
         
+    
+        
+                
+                    <header>
+                        <nav itemscope itemtype="http://schema.org/SiteNavigationElement">
+                        
+                            <a itemprop="url"
+                               class=""
+                               href="https:&#x2F;&#x2F;dev-random.io">
+                                <span itemprop="name">&#x2F;dev&#x2F;random
+                                </span></a>
+                        
+                            <a itemprop="url"
+                               class=""
+                               href="https:&#x2F;&#x2F;dev-random.io&#x2F;tags">
+                                <span itemprop="name">Tags
+                                </span></a>
+                        
+                            <a itemprop="url"
+                               class=""
+                               href="https:&#x2F;&#x2F;google.com">
+                                <span itemprop="name">Google
+                                </span></a>
+                        
+                        </nav>
+                    </header>
+                
+            
+    
 
 <article itemscope itemtype="http://schema.org/BlogPosting">
     <header>
@@ -34,7 +61,7 @@
         <circle cx="16" cy="16" r="14"/>
         <path d="M16 8 L16 16 20 20"/>
     </svg>
-    <span>1 minute read</span>
+    <span>3 minute read</span>
     <svg style="margin-bottom: -3px" class="i-edit" viewBox="0 0 32 32"
          width="16" height="16" fill="none" stroke="currentcolor"
          stroke-linecap="round" stroke-linejoin="round" stroke-width="6.25%">
@@ -48,10 +75,9 @@
       <p>This is <code>/dev/random</code>.</p>
 <p>Some random bits from a biased quantum-based random generator, or so-called my brain.</p>
 <p>For the very first post, I'm gonna write on how I set this blog up, so that if you
-are interested, you can try it my way.
-<a name="continue-reading"></a></p>
-<h1 id="blog-engine">Blog Engine</h1>
-<p>As a Rust lover, I choose <a href="https://www.getgutenberg.io/">Gutenberg</a> as my driver, it's
+are interested, you can try it my way.</p>
+<span id="continue-reading"></span><h1 id="blog-engine">Blog Engine</h1>
+<p>As a Rust lover, I choose <a href="https://www.getzola.org/">Zola</a> as my driver, it's
 a nice <strong>written in Rust</strong> static page generator. Just like Golang, Rust can compile
 the whole project into nice single binary that can be downloaded and run everywhere.
 That is also the way I set CI to deploy this blog, but more on that later.</p>
@@ -61,50 +87,50 @@ That is also the way I set CI to deploy this blog, but more on that later.</p>
 <p>To deploy to Github Page, I have to push the final HTMLs to <code>master</code> branch,
 so I keep the sources (blogs content, templates, configurations) in a <code>source</code> branch.
 After done writing blog posts and configuring, We build using:</p>
-<pre style="background-color:#2b303b">
-<span style="background-color:#2b303b;color:#c0c5ce;">gutenberg build
-</span></pre>
+<pre style="background-color:#2b303b;">
+<code><span style="color:#bf616a;">gutenberg</span><span style="color:#c0c5ce;"> build
+</span></code></pre>
 <p>Now Gutenberg will generate the nice HTMLs, minified CSSs all into <code>public</code> folder, we need to push
 that folder as the content of <code>master</code> branch, using:</p>
-<pre style="background-color:#2b303b">
-<span style="background-color:#2b303b;color:#c0c5ce;">git subtree push --prefix public origin master
-</span></pre><h1 id="ci">CI</h1>
-<p>Everytime I change something I need to run the Deployment steps again.
-Let's be lazy and ask someone else to do that for us, introducing
+<pre style="background-color:#2b303b;">
+<code><span style="color:#bf616a;">git</span><span style="color:#c0c5ce;"> subtree push</span><span style="color:#bf616a;"> --prefix</span><span style="color:#c0c5ce;"> public origin master
+</span></code></pre><h1 id="ci">CI</h1>
+<p>Everytime I change something I need to run the Deployment steps again. 
+Let's be lazy and ask someone else to do that for us, introducing 
 <a href="https://travis-ci.com">TravisCI</a>.<br />
 Register your Github project with TravisCI and we are ready to roll, be careful not to register
 your project with both <code>https://travis-ci.com</code> and <code>https://travis-ci.org</code> because that was
 what I did, and it caused some confusions for me.</p>
 <p>After that, put <code>.travis.yml</code> file into your project with following content:</p>
-<pre style="background-color:#2b303b">
-<span style="background-color:#2b303b;color:#c0c5ce;"># Only build from `source` branch
-</span><span style="background-color:#2b303b;color:#c0c5ce;">branches:
-</span><span style="background-color:#2b303b;color:#c0c5ce;">  </span><span style="background-color:#2b303b;color:#c0c5ce;">only:
-</span><span style="background-color:#2b303b;color:#c0c5ce;">  </span><span style="background-color:#2b303b;color:#c0c5ce;">- source
-</span><span style="background-color:#2b303b;color:#c0c5ce;">
-</span><span style="background-color:#2b303b;color:#c0c5ce;">before_script:
-</span><span style="background-color:#2b303b;color:#c0c5ce;">  </span><span style="background-color:#2b303b;color:#c0c5ce;"># Download and unzip the gutenberg executable
-</span><span style="background-color:#2b303b;color:#c0c5ce;">  </span><span style="background-color:#2b303b;color:#c0c5ce;"># Replace the version numbers in the URL by the version you want to use
-</span><span style="background-color:#2b303b;color:#c0c5ce;">  </span><span style="background-color:#2b303b;color:#c0c5ce;">- curl -s -L https://github.com/Keats/gutenberg/releases/download/v0.3.3/gutenberg-v0.3.3-x86_64-unknown-linux-gnu.tar.gz | sudo tar xvzf - -C /usr/local/bin
-</span><span style="background-color:#2b303b;color:#c0c5ce;">
-</span><span style="background-color:#2b303b;color:#c0c5ce;">script:
-</span><span style="background-color:#2b303b;color:#c0c5ce;">  </span><span style="background-color:#2b303b;color:#c0c5ce;">- gutenberg build
-</span><span style="background-color:#2b303b;color:#c0c5ce;">
-</span><span style="background-color:#2b303b;color:#c0c5ce;"># Deployment config, full explanation here: https://docs.travis-ci.com/user/deployment/pages/
-</span><span style="background-color:#2b303b;color:#c0c5ce;">deploy:
-</span><span style="background-color:#2b303b;color:#c0c5ce;">  </span><span style="background-color:#2b303b;color:#c0c5ce;">provider: pages
-</span><span style="background-color:#2b303b;color:#c0c5ce;">  </span><span style="background-color:#2b303b;color:#c0c5ce;">skip-cleanup: true
-</span><span style="background-color:#2b303b;color:#c0c5ce;">  </span><span style="background-color:#2b303b;color:#c0c5ce;">github-token: $GITHUB_TOKEN  # Set in the settings page of your repository, as a secure variable
-</span><span style="background-color:#2b303b;color:#c0c5ce;">  </span><span style="background-color:#2b303b;color:#c0c5ce;">keep-history: true
-</span><span style="background-color:#2b303b;color:#c0c5ce;">  </span><span style="background-color:#2b303b;color:#c0c5ce;">local-dir: public
-</span><span style="background-color:#2b303b;color:#c0c5ce;">  </span><span style="background-color:#2b303b;color:#c0c5ce;">target-branch: master
-</span><span style="background-color:#2b303b;color:#c0c5ce;">  </span><span style="background-color:#2b303b;color:#c0c5ce;">on:
-</span><span style="background-color:#2b303b;color:#c0c5ce;">    </span><span style="background-color:#2b303b;color:#c0c5ce;">branch: source
-</span></pre>
+<pre style="background-color:#2b303b;">
+<code><span style="color:#65737e;"># Only build from `source` branch
+</span><span style="color:#bf616a;">branches</span><span style="color:#c0c5ce;">:
+  </span><span style="color:#bf616a;">only</span><span style="color:#c0c5ce;">:
+  - </span><span style="color:#bf616a;">source
+
+before_script</span><span style="color:#c0c5ce;">:
+  </span><span style="color:#65737e;"># Download and unzip the gutenberg executable
+  # Replace the version numbers in the URL by the version you want to use
+  </span><span style="color:#c0c5ce;">- </span><span style="color:#bf616a;">curl -s -L https://github.com/Keats/gutenberg/releases/download/v0.3.3/gutenberg-v0.3.3-x86_64-unknown-linux-gnu.tar.gz | sudo tar xvzf - -C /usr/local/bin
+
+script</span><span style="color:#c0c5ce;">:
+  - </span><span style="color:#a3be8c;">gutenberg build
+
+</span><span style="color:#65737e;"># Deployment config, full explanation here: https://docs.travis-ci.com/user/deployment/pages/
+</span><span style="color:#bf616a;">deploy</span><span style="color:#c0c5ce;">:
+  </span><span style="color:#bf616a;">provider</span><span style="color:#c0c5ce;">: </span><span style="color:#bf616a;">pages
+  skip-cleanup</span><span style="color:#c0c5ce;">: </span><span style="color:#d08770;">true
+  </span><span style="color:#bf616a;">github-token</span><span style="color:#c0c5ce;">: </span><span style="color:#a3be8c;">$GITHUB_TOKEN  </span><span style="color:#65737e;"># Set in the settings page of your repository, as a secure variable
+  </span><span style="color:#bf616a;">keep-history</span><span style="color:#c0c5ce;">: </span><span style="color:#d08770;">true
+  </span><span style="color:#bf616a;">local-dir</span><span style="color:#c0c5ce;">: </span><span style="color:#bf616a;">public
+  target-branch</span><span style="color:#c0c5ce;">: </span><span style="color:#bf616a;">master
+  </span><span style="color:#d08770;">on</span><span style="color:#c0c5ce;">:
+    </span><span style="color:#bf616a;">branch</span><span style="color:#c0c5ce;">: </span><span style="color:#a3be8c;">source
+</span></code></pre>
 <p>Push it on and wait for the result:</p>
-<pre style="background-color:#2b303b">
-<span style="background-color:#2b303b;color:#c0c5ce;">git push origin source
-</span></pre>
+<pre style="background-color:#2b303b;">
+<code><span style="color:#bf616a;">git</span><span style="color:#c0c5ce;"> push origin source
+</span></code></pre>
 <p>That's all of it. Hope to see you soon.</p>
 
     </div>
@@ -115,32 +141,6 @@ what I did, and it caused some confusions for me.</p>
             <p>
                 
                 
-                
-                    and tagged
-                    
-                        <a href="https:&#x2F;&#x2F;dev-random.io&#x2F;tags&#x2F;hello-world&#x2F;">Hello World</a>
-                        
-                            
-                                
-                                    ,
-                                
-                            
-                        
-                    
-                        <a href="https:&#x2F;&#x2F;dev-random.io&#x2F;tags&#x2F;ci&#x2F;">ci</a>
-                        
-                            
-                                
-                                    and
-                                
-                            
-                        
-                    
-                        <a href="https:&#x2F;&#x2F;dev-random.io&#x2F;tags&#x2F;static-page&#x2F;">static page</a>
-                        
-                            
-                        
-                    
                 
             </p>
         </footer>
