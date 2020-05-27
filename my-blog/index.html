@@ -61,7 +61,7 @@
         <circle cx="16" cy="16" r="14"/>
         <path d="M16 8 L16 16 20 20"/>
     </svg>
-    <span>3 minute read</span>
+    <span>2 minute read</span>
     <svg style="margin-bottom: -3px" class="i-edit" viewBox="0 0 32 32"
          width="16" height="16" fill="none" stroke="currentcolor"
          stroke-linecap="round" stroke-linejoin="round" stroke-width="6.25%">
@@ -103,21 +103,21 @@ your project with both <code>https://travis-ci.com</code> and <code>https://trav
 what I did, and it caused some confusions for me.</p>
 <p>After that, put <code>.travis.yml</code> file into your project with following content:</p>
 <pre style="background-color:#2b303b;">
-<code><span style="color:#65737e;"># Only build from `source` branch
-</span><span style="color:#bf616a;">branches</span><span style="color:#c0c5ce;">:
+<code><span style="color:#bf616a;">language</span><span style="color:#c0c5ce;">: </span><span style="color:#bf616a;">minimal
+
+branches</span><span style="color:#c0c5ce;">:
   </span><span style="color:#bf616a;">only</span><span style="color:#c0c5ce;">:
   - </span><span style="color:#bf616a;">source
 
 before_script</span><span style="color:#c0c5ce;">:
-  </span><span style="color:#65737e;"># Download and unzip the gutenberg executable
+  </span><span style="color:#65737e;"># Download and unzip the zola executable
   # Replace the version numbers in the URL by the version you want to use
-  </span><span style="color:#c0c5ce;">- </span><span style="color:#bf616a;">curl -s -L https://github.com/Keats/gutenberg/releases/download/v0.3.3/gutenberg-v0.3.3-x86_64-unknown-linux-gnu.tar.gz | sudo tar xvzf - -C /usr/local/bin
+  </span><span style="color:#c0c5ce;">- </span><span style="color:#bf616a;">curl -s -L https://github.com/getzola/zola/releases/download/v0.11.0/zola-v0.11.0-x86_64-unknown-linux-gnu.tar.gz | sudo tar xvzf - -C /usr/local/bin
 
 script</span><span style="color:#c0c5ce;">:
-  - </span><span style="color:#a3be8c;">gutenberg build
+  - </span><span style="color:#bf616a;">zola build
 
-</span><span style="color:#65737e;"># Deployment config, full explanation here: https://docs.travis-ci.com/user/deployment/pages/
-</span><span style="color:#bf616a;">deploy</span><span style="color:#c0c5ce;">:
+deploy</span><span style="color:#c0c5ce;">:
   </span><span style="color:#bf616a;">provider</span><span style="color:#c0c5ce;">: </span><span style="color:#bf616a;">pages
   skip-cleanup</span><span style="color:#c0c5ce;">: </span><span style="color:#d08770;">true
   </span><span style="color:#bf616a;">github-token</span><span style="color:#c0c5ce;">: </span><span style="color:#a3be8c;">$GITHUB_TOKEN  </span><span style="color:#65737e;"># Set in the settings page of your repository, as a secure variable
