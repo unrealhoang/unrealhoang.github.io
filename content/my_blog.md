@@ -14,7 +14,7 @@ are interested, you can try it my way.
 
 # Blog Engine
 
-As a Rust lover, I choose [Gutenberg](https://www.getgutenberg.io/) as my driver, it's
+As a Rust lover, I choose [Zola](https://www.getzola.org/) as my driver, it's
 a nice **written in Rust** static page generator. Just like Golang, Rust can compile
 the whole project into nice single binary that can be downloaded and run everywhere.
 That is also the way I set CI to deploy this blog, but more on that later.
