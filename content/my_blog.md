@@ -28,12 +28,15 @@ That is also the way I set CI to deploy this blog, but more on that later.
 To deploy to Github Page, I have to push the final HTMLs to `master` branch,
 so I keep the sources (blogs content, templates, configurations) in a `source` branch.
 After done writing blog posts and configuring, We build using:
-```
+
+```bash
 gutenberg build
 ```
+
 Now Gutenberg will generate the nice HTMLs, minified CSSs all into `public` folder, we need to push
 that folder as the content of `master` branch, using:
-```
+
+```bash
 git subtree push --prefix public origin master
 ```
 
@@ -47,7 +50,8 @@ your project with both `https://travis-ci.com` and `https://travis-ci.org` becau
 what I did, and it caused some confusions for me.
 
 After that, put `.travis.yml` file into your project with following content:
-```
+
+```yaml
 # Only build from `source` branch
 branches:
   only:
@@ -74,7 +78,8 @@ deploy:
 ```
 
 Push it on and wait for the result:
-```
+
+```bash
 git push origin source
 ```
 
