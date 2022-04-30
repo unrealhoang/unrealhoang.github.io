@@ -1,6 +1,7 @@
 +++
 title = "Welcome to my blog"
-date = 2018-06-20
+date = 2022-04-30
+[taxonomies]
 tags = ["Hello World", "ci", "static page"]
 +++
 
@@ -30,10 +31,10 @@ so I keep the sources (blogs content, templates, configurations) in a `source` b
 After done writing blog posts and configuring, We build using:
 
 ```bash
-gutenberg build
+zola build
 ```
 
-Now Gutenberg will generate the nice HTMLs, minified CSSs all into `public` folder, we need to push
+Now Zola will generate the nice HTMLs, minified CSSs all into `public` folder, we need to push
 that folder as the content of `master` branch, using:
 
 ```bash
@@ -61,7 +62,7 @@ branches:
 before_script:
   # Download and unzip the zola executable
   # Replace the version numbers in the URL by the version you want to use
-  - curl -s -L https://github.com/getzola/zola/releases/download/v0.11.0/zola-v0.11.0-x86_64-unknown-linux-gnu.tar.gz | sudo tar xvzf - -C /usr/local/bin
+  - curl -s -L https://github.com/getzola/zola/releases/download/v0.15.3/zola-v0.15.3-x86_64-unknown-linux-gnu.tar.gz | sudo tar xvzf - -C /usr/local/bin
 
 script:
   - zola build
