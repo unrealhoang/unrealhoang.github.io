@@ -4,15 +4,36 @@ base_url = "https://dev-random.io"
 # Whether to automatically compile all Sass files in the sass directory
 compile_sass = true
 
-# Whether to do syntax highlighting
-# Theme can be customised by setting the `highlight_theme` variable to a theme supported by Gutenberg
-highlight_code = true
 
 # Whether to build a search index to be used later on by a JavaScript library
 build_search_index = true
 
 theme = "after-dark"
 title = "/dev/random"
+
+taxonomies = [
+    { name = "tags", feed = true },
+]
+
+[markdown]
+highlight_code = true
+highlight_theme = "ayu-dark"
+
+[slugify]
+paths = "on"
+taxonomies = "on"
+anchors = "on"
+
+[search]
+# Whether to include the title of the page/section in the index
+include_title = true
+# Whether to include the description of the page/section in the index
+include_description = false
+# Whether to include the path of the page/section in the index
+include_path = false
+# Whether to include the rendered content of the page/section in the index
+include_content = true
+
 [extra]
 # Put all your custom variables here
 after_dark_menu = [
@@ -21,3 +42,6 @@ after_dark_menu = [
     {url = "https://google.com", name = "Google"},
 ]
 after_dark_title = "/dev/random"
+author = "unrealhoang"
+github = "unrealhoang"
+twitter = "unrealhoang"
