@@ -1,6 +1,6 @@
 +++
 title = "Welcome to my blog"
-date = 2022-04-30
+date = "2022-04-30"
 [taxonomies]
 tags = ["Hello World", "ci", "static page"]
 +++
