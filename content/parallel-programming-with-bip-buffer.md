@@ -1,6 +1,6 @@
 +++
 title = "Lock-free programming with BipBuffer"
-date = 2022-05-09
+date = "2022-05-09"
 [taxonomies]
 tags = ["parallel-programming", "rust", "data-struture", "parallel", "lock-free"]
 +++
