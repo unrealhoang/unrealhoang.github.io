@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:lang="en">
+	<title>&#x2F;dev&#x2F;random - Hello World</title>
+	<link href="https://dev-random.io/tags/hello-world/atom.xml" rel="self" type="application/atom+xml"/>
+  <link href="https://dev-random.io"/>
+	<generator uri="https://www.getzola.org/">Zola</generator>
+	<updated>2022-04-30T00:00:00+00:00</updated>
+	<id>https://dev-random.io/tags/hello-world/atom.xml</id>
+	<entry xml:lang="en">
+		<title>Welcome to my blog</title>
+		<published>2022-04-30T00:00:00+00:00</published>
+		<updated>2022-04-30T00:00:00+00:00</updated>
+		<link href="https://dev-random.io/my-blog/" type="text/html"/>
+		<id>https://dev-random.io/my-blog/</id>
+		<content type="html">&lt;p&gt;This is &lt;code&gt;&#x2F;dev&#x2F;random&lt;&#x2F;code&gt;.&lt;&#x2F;p&gt;
+&lt;p&gt;Some random bits from a biased quantum-based random generator, or so-called my brain.&lt;&#x2F;p&gt;
+&lt;p&gt;For the very first post, I&#x27;m gonna write on how I set this blog up, so that if you
+are interested, you can try it my way.&lt;&#x2F;p&gt;
+&lt;span id=&quot;continue-reading&quot;&gt;&lt;&#x2F;span&gt;&lt;h1 id=&quot;blog-engine&quot;&gt;Blog Engine&lt;&#x2F;h1&gt;
+&lt;p&gt;As a Rust lover, I choose &lt;a href=&quot;https:&#x2F;&#x2F;www.getzola.org&#x2F;&quot;&gt;Zola&lt;&#x2F;a&gt; as my driver, it&#x27;s
+a nice &lt;strong&gt;written in Rust&lt;&#x2F;strong&gt; static page generator. Just like Golang, Rust can compile
+the whole project into nice single binary that can be downloaded and run everywhere.
+That is also the way I set CI to deploy this blog, but more on that later.&lt;&#x2F;p&gt;
+&lt;h1 id=&quot;hosting&quot;&gt;Hosting&lt;&#x2F;h1&gt;
+&lt;p&gt;&lt;a href=&quot;https:&#x2F;&#x2F;pages.github.com&quot;&gt;Github Page&lt;&#x2F;a&gt; is home for us developer, and it&#x27;s also free. Why not?&lt;&#x2F;p&gt;
+&lt;h1 id=&quot;deploy&quot;&gt;Deploy&lt;&#x2F;h1&gt;
+&lt;p&gt;To deploy to Github Page, I have to push the final HTMLs to &lt;code&gt;master&lt;&#x2F;code&gt; branch,
+so I keep the sources (blogs content, templates, configurations) in a &lt;code&gt;source&lt;&#x2F;code&gt; branch.
+After done writing blog posts and configuring, We build using:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;bash&quot; style=&quot;background-color:#0f1419;color:#bfbab0;&quot; class=&quot;language-bash &quot;&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;&lt;span style=&quot;color:#ffb454;&quot;&gt;zola&lt;&#x2F;span&gt;&lt;span&gt; build
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;Now Zola will generate the nice HTMLs, minified CSSs all into &lt;code&gt;public&lt;&#x2F;code&gt; folder, we need to push
+that folder as the content of &lt;code&gt;master&lt;&#x2F;code&gt; branch, using:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;bash&quot; style=&quot;background-color:#0f1419;color:#bfbab0;&quot; class=&quot;language-bash &quot;&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;&lt;span style=&quot;color:#ffb454;&quot;&gt;git&lt;&#x2F;span&gt;&lt;span&gt; subtree push&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f29718;&quot;&gt; --prefix&lt;&#x2F;span&gt;&lt;span&gt; public origin master
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;h1 id=&quot;ci&quot;&gt;CI&lt;&#x2F;h1&gt;
+&lt;p&gt;Everytime I change something I need to run the Deployment steps again. 
+Let&#x27;s be lazy and ask someone else to do that for us, introducing 
+&lt;a href=&quot;https:&#x2F;&#x2F;travis-ci.com&quot;&gt;TravisCI&lt;&#x2F;a&gt;.&lt;br &#x2F;&gt;
+Register your Github project with TravisCI and we are ready to roll, be careful not to register
+your project with both &lt;code&gt;https:&#x2F;&#x2F;travis-ci.com&lt;&#x2F;code&gt; and &lt;code&gt;https:&#x2F;&#x2F;travis-ci.org&lt;&#x2F;code&gt; because that was
+what I did, and it caused some confusions for me.&lt;&#x2F;p&gt;
+&lt;p&gt;After that, put &lt;code&gt;.travis.yml&lt;&#x2F;code&gt; file into your project with following content:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;yaml&quot; style=&quot;background-color:#0f1419;color:#bfbab0;&quot; class=&quot;language-yaml &quot;&gt;&lt;code class=&quot;language-yaml&quot; data-lang=&quot;yaml&quot;&gt;&lt;span style=&quot;color:#59c2ff;&quot;&gt;language&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bfbab0cc;&quot;&gt;: &lt;&#x2F;span&gt;&lt;span style=&quot;color:#c2d94c;&quot;&gt;minimal
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#59c2ff;&quot;&gt;branches&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bfbab0cc;&quot;&gt;:
+&lt;&#x2F;span&gt;&lt;span&gt;  &lt;&#x2F;span&gt;&lt;span style=&quot;color:#59c2ff;&quot;&gt;only&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bfbab0cc;&quot;&gt;:
+&lt;&#x2F;span&gt;&lt;span&gt;  - &lt;&#x2F;span&gt;&lt;span style=&quot;color:#c2d94c;&quot;&gt;source
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#59c2ff;&quot;&gt;before_script&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bfbab0cc;&quot;&gt;:
+&lt;&#x2F;span&gt;&lt;span&gt;  &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#5c6773;&quot;&gt;# Download and unzip the zola executable
+&lt;&#x2F;span&gt;&lt;span&gt;  &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#5c6773;&quot;&gt;# Replace the version numbers in the URL by the version you want to use
+&lt;&#x2F;span&gt;&lt;span&gt;  - &lt;&#x2F;span&gt;&lt;span style=&quot;color:#c2d94c;&quot;&gt;curl -s -L https:&#x2F;&#x2F;github.com&#x2F;getzola&#x2F;zola&#x2F;releases&#x2F;download&#x2F;v0.15.3&#x2F;zola-v0.15.3-x86_64-unknown-linux-gnu.tar.gz | sudo tar xvzf - -C &#x2F;usr&#x2F;local&#x2F;bin
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#59c2ff;&quot;&gt;script&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bfbab0cc;&quot;&gt;:
+&lt;&#x2F;span&gt;&lt;span&gt;  - &lt;&#x2F;span&gt;&lt;span style=&quot;color:#c2d94c;&quot;&gt;zola build
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#59c2ff;&quot;&gt;deploy&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bfbab0cc;&quot;&gt;:
+&lt;&#x2F;span&gt;&lt;span&gt;  &lt;&#x2F;span&gt;&lt;span style=&quot;color:#59c2ff;&quot;&gt;provider&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bfbab0cc;&quot;&gt;: &lt;&#x2F;span&gt;&lt;span style=&quot;color:#c2d94c;&quot;&gt;pages
+&lt;&#x2F;span&gt;&lt;span&gt;  &lt;&#x2F;span&gt;&lt;span style=&quot;color:#59c2ff;&quot;&gt;skip-cleanup&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bfbab0cc;&quot;&gt;: &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f29718;&quot;&gt;true
+&lt;&#x2F;span&gt;&lt;span&gt;  &lt;&#x2F;span&gt;&lt;span style=&quot;color:#59c2ff;&quot;&gt;github-token&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bfbab0cc;&quot;&gt;: &lt;&#x2F;span&gt;&lt;span style=&quot;color:#c2d94c;&quot;&gt;$GITHUB_TOKEN  &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#5c6773;&quot;&gt;# Set in the settings page of your repository, as a secure variable
+&lt;&#x2F;span&gt;&lt;span&gt;  &lt;&#x2F;span&gt;&lt;span style=&quot;color:#59c2ff;&quot;&gt;keep-history&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bfbab0cc;&quot;&gt;: &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f29718;&quot;&gt;true
+&lt;&#x2F;span&gt;&lt;span&gt;  &lt;&#x2F;span&gt;&lt;span style=&quot;color:#59c2ff;&quot;&gt;local-dir&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bfbab0cc;&quot;&gt;: &lt;&#x2F;span&gt;&lt;span style=&quot;color:#c2d94c;&quot;&gt;public
+&lt;&#x2F;span&gt;&lt;span&gt;  &lt;&#x2F;span&gt;&lt;span style=&quot;color:#59c2ff;&quot;&gt;target-branch&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bfbab0cc;&quot;&gt;: &lt;&#x2F;span&gt;&lt;span style=&quot;color:#c2d94c;&quot;&gt;master
+&lt;&#x2F;span&gt;&lt;span&gt;  &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f29718;&quot;&gt;on&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bfbab0cc;&quot;&gt;:
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#59c2ff;&quot;&gt;branch&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bfbab0cc;&quot;&gt;: &lt;&#x2F;span&gt;&lt;span style=&quot;color:#c2d94c;&quot;&gt;source
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;Push it on and wait for the result:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;bash&quot; style=&quot;background-color:#0f1419;color:#bfbab0;&quot; class=&quot;language-bash &quot;&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;&lt;span style=&quot;color:#ffb454;&quot;&gt;git&lt;&#x2F;span&gt;&lt;span&gt; push origin source
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;That&#x27;s all of it. Hope to see you soon.&lt;&#x2F;p&gt;
+</content>
+	</entry>
+</feed>

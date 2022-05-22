@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+
+    <title>Touch events - Example - code sample</title>
+  </head>
+  <body>
+
+    <canvas id="canvas" width="600" height="600" style="border:solid black 1px;">
+      Your browser does not support canvas element.
+    </canvas>
+    <br>
+    Log: <pre id="log" style="border: 1px solid #ccc;"></pre>
+
+    <script>
+      function startup() {
+        var el = document.getElementById("canvas");
+        el.addEventListener("touchstart", handleStart, false);
+        el.addEventListener("touchend", handleEnd, false);
+        el.addEventListener("touchcancel", handleCancel, false);
+        el.addEventListener("touchmove", handleMove, false);
+        el.addEventListener("mousedown", handleMouseStart, false);
+        el.addEventListener("mousemove", handleMouseMove, false);
+        el.addEventListener("mouseup", handleMouseEnd, false);
+        el.addEventListener("mouseout", handleMouseCancel, false);
+      }
+
+      document.addEventListener("DOMContentLoaded", startup);
+      var ongoingStroke = [];
+      var countEvents = 0;
+      var lastTime = Date.now();
+      var maxCount = 0;
+      var events = []
+
+      function timeToUint64(time) {
+        // new Uint16Array(BigUint64Array.of(BigInt(time)).buffer);
+        var r = new Uint16Array(4);
+        // time << 32
+        r[2] = (time / 4294967296) | 0;
+        // time << 16 & (2^16-1)
+        r[1] = (time / 65536) & 65535;
+        // time & (2^16-1)
+        r[0] = time & 65535;
+
+        return r;
+      }
+
+      function Point(x, y, time_diff, force) {
+        this.data = Uint16Array.of(x, y, time_diff, force * 65535);
+      }
+
+      function Stroke(id) {
+        this.id = id;
+        this.start_at = Date.now();
+        this.end_at = null;
+        this.points = []
+      }
+
+      Stroke.prototype.addPoint = function(x, y, force) {
+        if (this.end_at != null) { return; }
+
+        var time_diff = Date.now() - this.start_at;
+        var point = new Point(x, y, time_diff, force);
+        this.points.push(point);
+      };
+
+      Stroke.prototype.end = function() {
+        this.end_at = Date.now();
+      };
+
+      Stroke.prototype.serialize = function() {
+        // 4 for start_at, 4 * points
+        var size = 4 + 4 * this.points.length;
+        var result = new Uint16Array(size);
+
+        var start_at_buf = timeToUint64(this.start_at);
+        result.set(start_at_buf, 0);
+        for (var i = 0; i < this.points.length; i++) {
+          result.set(this.points[i].data, (i + 1) * 4);
+        }
+        return result;
+      }
+
+      Stroke.prototype.lastX = function() {
+        return this.points.slice(-1)[0].data[0];
+      }
+
+      Stroke.prototype.lastY = function() {
+        return this.points.slice(-1)[0].data[1];
+      }
+
+      function getMousePos(canvas, evt) {
+          var rect = canvas.getBoundingClientRect();
+          return {
+            x: evt.clientX - rect.left,
+            y: evt.clientY - rect.top
+          };
+      }
+
+      function handleMouseStart(evt) {
+        var el = document.getElementById("canvas");
+        var ctx = el.getContext("2d");
+        var stroke = new Stroke(-1);
+        var pos = getMousePos(el, evt);
+        stroke.addPoint(pos.x, pos.y, 0);
+        ongoingStroke.push(stroke);
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, 4, 0, 2 * Math.PI, false);  // a circle at the start
+        ctx.fillStyle = "#FF00FF";
+        ctx.fill();
+      }
+
+      function handleMouseMove(evt) {
+        evt.preventDefault();
+        var el = document.getElementById("canvas");
+        var ctx = el.getContext("2d");
+        countEvents++;
+        var curTime = Date.now();
+        if (curTime - lastTime > 1000) {
+          if (maxCount < countEvents / (curTime - lastTime)) {
+            maxCount = countEvents / (curTime - lastTime);
+            log("Max rate updated: " + maxCount);
+          }
+          countEvents = 0;
+          lastTime = curTime;
+        }
+
+        var color = "#FF00FF";
+        var idx = ongoingStrokeById(-1);
+
+        if (idx >= 0) {
+          console.log("continuing touch "+idx);
+          ctx.beginPath();
+          ctx.moveTo(ongoingStroke[idx].lastX(), ongoingStroke[idx].lastY());
+
+          var pos = getMousePos(el, evt);
+          ctx.lineTo(pos.x, pos.y);
+          ctx.lineWidth = 4;
+          ctx.strokeStyle = color;
+          ctx.stroke();
+
+          ongoingStroke[idx].addPoint(pos.x, pos.y, 0);
+        } else {
+          console.log("can't figure out which touch to continue");
+        }
+      }
+
+      function handleMouseEnd(evt) {
+        evt.preventDefault();
+        var el = document.getElementById("canvas");
+        var ctx = el.getContext("2d");
+
+        var color = "#FF00FF";
+        var idx = ongoingStrokeById(-1);
+
+        var pos = getMousePos(el, evt);
+        if (idx >= 0) {
+          ctx.lineWidth = 4;
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          ctx.moveTo(ongoingStroke[idx].lastX(), ongoingStroke[idx].lastY());
+          ctx.lineTo(pos.x, pos.y);
+          ctx.fillRect(pos.x - 4, pos.y - 4, 8, 8);  // and a square at the end
+          var stroke = ongoingStroke.splice(idx, 1)[0];  // remove it; we're done
+          stroke.addPoint(pos.x, pos.y, 0);
+          stroke.end();
+          var t = stroke.serialize();
+          log("Deleted: " + t.slice(0, 12) + " size: " + t.length);
+        } else {
+          console.log("can't figure out which touch to end");
+        }
+      }
+
+      function handleMouseCancel(evt) {
+        evt.preventDefault();
+
+        var idx = ongoingStrokeById(-1);
+        var stroke = ongoingStroke.splice(idx, 1)[0];  // remove it; we're done
+        stroke.end();
+        var t = stroke.serialize();
+        log("Deleted: " + t.slice(0, 12) + " size: " + t.length);
+      }
+
+      function handleStart(evt) {
+        evt.preventDefault();
+        console.log("touchstart.");
+        var el = document.getElementById("canvas");
+        var ctx = el.getContext("2d");
+        var touches = evt.changedTouches;
+
+        for (var i = 0; i < touches.length; i++) {
+          console.log("touchstart:" + i + "...");
+          var stroke = new Stroke(touches[i].identifier);
+          var force = (touches[i].force != undefined) ? touches[i].force : 0;
+
+          var pos = getMousePos(el, touches[i]);
+          stroke.addPoint(pos.x, pos.y, force);
+          ongoingStroke.push(stroke);
+          var color = colorForTouch(touches[i]);
+          ctx.beginPath();
+          ctx.arc(pos.x, pos.y, 4, 0, 2 * Math.PI, false);  // a circle at the start
+          ctx.fillStyle = color;
+          ctx.fill();
+          console.log("touchstart:" + i + ".");
+        }
+      }
+
+      function handleMove(evt) {
+        evt.preventDefault();
+        var el = document.getElementById("canvas");
+        var ctx = el.getContext("2d");
+        var touches = evt.changedTouches;
+        countEvents++;
+        var curTime = Date.now();
+        if (curTime - lastTime > 1000) {
+          if (maxCount < countEvents / (curTime - lastTime)) {
+            maxCount = countEvents / (curTime - lastTime);
+            log("Max rate updated: " + maxCount);
+          }
+          countEvents = 0;
+          lastTime = curTime;
+        }
+
+        for (var i = 0; i < touches.length; i++) {
+          var color = colorForTouch(touches[i]);
+          var idx = ongoingStrokeById(touches[i].identifier);
+
+          if (idx >= 0) {
+            console.log("continuing touch "+idx);
+            ctx.beginPath();
+            ctx.moveTo(ongoingStroke[idx].lastX(), ongoingStroke[idx].lastY());
+
+            var pos = getMousePos(el, touches[i]);
+            ctx.lineTo(pos.x, pos.y);
+            ctx.lineWidth = 4;
+            ctx.strokeStyle = color;
+            ctx.stroke();
+
+            var force = (touches[i].force != undefined) ? touches[i].force : 0;
+            ongoingStroke[idx].addPoint(pos.x, pos.y, force);
+          } else {
+            console.log("can't figure out which touch to continue");
+          }
+        }
+      }
+      function handleEnd(evt) {
+        evt.preventDefault();
+        var el = document.getElementById("canvas");
+        var ctx = el.getContext("2d");
+        var touches = evt.changedTouches;
+        log("touchend: " + touches.length);
+
+        for (var i = 0; i < touches.length; i++) {
+          var color = colorForTouch(touches[i]);
+          var idx = ongoingStrokeById(touches[i].identifier);
+
+          var pos = getMousePos(el, touches[i]);
+          if (idx >= 0) {
+            ctx.lineWidth = 4;
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.moveTo(ongoingStroke[idx].lastX(), ongoingStroke[idx].lastY());
+            ctx.lineTo(pos.x, pos.y);
+            ctx.fillRect(pos.x - 4, pos.y - 4, 8, 8);  // and a square at the end
+            var stroke = ongoingStroke.splice(idx, 1)[0];  // remove it; we're done
+            var force = (touches[i].force != undefined) ? touches[i].force : 0;
+            stroke.addPoint(pos.x, pos.y, force);
+            stroke.end();
+            var t = stroke.serialize();
+            log("Deleted: " + t.slice(0, 12) + " size: " + t.length);
+          } else {
+            console.log("can't figure out which touch to end");
+          }
+        }
+      }
+      function handleCancel(evt) {
+        evt.preventDefault();
+        console.log("touchcancel.");
+        var touches = evt.changedTouches;
+
+        for (var i = 0; i < touches.length; i++) {
+          var idx = ongoingStrokeById(touches[i].identifier);
+          var stroke = ongoingStroke.splice(idx, 1)[0];  // remove it; we're done
+          stroke.end();
+          var t = stroke.serialize();
+          log("Deleted: " + t.slice(0, 12) + " size: " + t.length);
+        }
+      }
+      function colorForTouch(id) {
+        var r = id % 16;
+        var g = Math.floor(id / 3) % 16;
+        var b = Math.floor(id / 7) % 16;
+        r = r.toString(16); // make it a hex digit
+        g = g.toString(16); // make it a hex digit
+        b = b.toString(16); // make it a hex digit
+        var color = "#" + r + g + b;
+        console.log("color for touch with identifier " + id + " = " + color);
+        return color;
+      }
+
+      function ongoingStrokeById(idToFind) {
+        for (var i = 0; i < ongoingStroke.length; i++) {
+          var id = ongoingStroke[i].id;
+
+          if (id == idToFind) {
+            return i;
+          }
+        }
+        return -1;    // not found
+      }
+      function log(msg) {
+        var p = document.getElementById('log');
+        p.innerHTML = msg + "\n" + p.innerHTML;
+      }
+    </script>
+
+  </body>
+</html>

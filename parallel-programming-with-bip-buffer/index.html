@@ -1,0 +1,955 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+      <meta http-equiv="X-UA-Compatible" content="IE=edge">
+      <meta http-equiv="content-type" content="text/html; charset=utf-8">
+
+      <!-- Enable responsiveness on mobile devices-->
+      <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+
+      <title>&#x2F;dev&#x2F;random</title>
+
+      
+
+      
+          <link rel="stylesheet" href="https://dev-random.io/site.css">
+      
+
+      
+      
+    </head>
+
+    <body class="hack dark main container">
+        
+    
+        
+                
+                    <header>
+                        <nav itemscope itemtype="http://schema.org/SiteNavigationElement">
+                        
+                            <a itemprop="url"
+                               class=""
+                               href="https:&#x2F;&#x2F;dev-random.io">
+                                <span itemprop="name">&#x2F;dev&#x2F;random
+                                </span></a>
+                        
+                            <a itemprop="url"
+                               class=""
+                               href="https:&#x2F;&#x2F;dev-random.io&#x2F;tags">
+                                <span itemprop="name">Tags
+                                </span></a>
+                        
+                            <a itemprop="url"
+                               class=""
+                               href="https:&#x2F;&#x2F;google.com">
+                                <span itemprop="name">Google
+                                </span></a>
+                        
+                        </nav>
+                    </header>
+                
+            
+    
+
+<article itemscope itemtype="http://schema.org/BlogPosting">
+    <header>
+        <h1 itemprop="headline">Parallel programming design with BipBuffer</h1>
+        <span class="muted">
+    <svg style="margin-bottom:-3px" class="i-clock" viewBox="0 0 32 32"
+         width="16" height="16" fill="none" stroke="currentcolor"
+         stroke-linecap="round" stroke-linejoin="round" stroke-width="6.25%">
+        <circle cx="16" cy="16" r="14"/>
+        <path d="M16 8 L16 16 20 20"/>
+    </svg>
+    <span>17 minute read</span>
+    <svg style="margin-bottom: -3px" class="i-edit" viewBox="0 0 32 32"
+         width="16" height="16" fill="none" stroke="currentcolor"
+         stroke-linecap="round" stroke-linejoin="round" stroke-width="6.25%">
+        <path d="M30 7 L25 2 5 22 3 29 10 27 Z M21 6 L26 11 Z M5 22 L10 27 Z"/>
+    </svg>
+
+    Published: 2022-05-09
+</span>
+    </header>
+    <div itemprop="articleBody">
+      <p>Coordinate the processing pattern of multiple CPU cores around shared memory data structure is one of the main
+focus of parallel programming.
+Let's explore the space, its problems and the iterative process to step by step find better data design,
+better data access pattern to get the best out of our modern, multiple CPU cores world by implementing a
+<a href="https://www.codeproject.com/Articles/3479/The-Bip-Buffer-The-Circular-Buffer-with-a-Twist">BipBuffer</a>
+and try to improve it.</p>
+<h1 id="bipbuffer">BipBuffer</h1>
+<p>BipBuffer is a simple single-producer single-consumer (SPSC) ring buffer data structure that allows the producer
+to reserve a portion of the queue, write to it, and commit when the writing is done. Only after committing, that
+the data is available for the consumer. Similarly, the consumer can ask for what has been available, read it, then
+commit the read to mark that region available for producer to write again.</p>
+<span id="continue-reading"></span>
+<p>Let's visualize how does it work:</p>
+<p>at initialization, both read and write pointer is at the beginning of the buffer.</p>
+<pre style="background-color:#0f1419;color:#bfbab0;"><code><span>write:      v
+</span><span>Buf:       [_ _ _ _ _ _ _ _]
+</span><span>read:       ^
+</span></code></pre>
+<p>to write data, we must do reservation with a len, the writer will claim that space and return a mutable slice
+for us to write to. After done with writing, we commit to advance the write pointer and let the reader know
+that the before-reserved portion of the buffer is now readable.</p>
+<pre style="background-color:#0f1419;color:#bfbab0;"><code><span>to_write = write.reserve(5)
+</span><span>
+</span><span>write:      v
+</span><span>to_write:   * * * * *
+</span><span>Buf:       [_ _ _ _ _ _ _ _]
+</span><span>read:       ^
+</span><span>
+</span><span>to_write.write(&quot;ABCDE&quot;);
+</span><span>to_write.commit()
+</span><span>
+</span><span>write:                v
+</span><span>Buf:       [A B C D E _ _ _]
+</span><span>read:       ^
+</span></code></pre>
+<p>On reader side, the reader will on request, return a non-mutable slice of available/readable data in the buffer.
+Similarly, after reading is done, we commit the read to advance the read pointer and let the writer know that
+portion is now available to be written again.</p>
+<pre style="background-color:#0f1419;color:#bfbab0;"><code><span>to_read = read.readable()
+</span><span>
+</span><span>write:                v
+</span><span>Buf:       [A B C D E _ _ _]
+</span><span>to_read:    * * * * *
+</span><span>read:       ^
+</span><span>
+</span><span>to_read == &quot;ABCDE&quot;
+</span><span>to_read.commit_read(5)
+</span><span>
+</span><span>write:                v
+</span><span>Buf:       [A B C D E _ _ _]
+</span><span>read:                 ^
+</span></code></pre>
+<p>now let's see how the buffer behave when we are at the end of the buffer,
+the reservation of len 2 is still supported by the buffer -&gt; proceed as normal.</p>
+<pre style="background-color:#0f1419;color:#bfbab0;"><code><span>to_write = write.reserve(2)
+</span><span>to_write.write(&quot;XY&quot;);
+</span><span>to_write.commit()
+</span><span>
+</span><span>write:                    v
+</span><span>Buf:       [A B C D E X Y _]
+</span><span>read:                 ^
+</span></code></pre>
+<p>at this point, the reservation of len 3 can not be made (only 1 available) at the end of the buffer,
+the reservation will wrap around and give back a mutable slice of len 3 at the beginning of the buffer.</p>
+<pre style="background-color:#0f1419;color:#bfbab0;"><code><span>to_write = write.reserve(3)
+</span><span>
+</span><span>write:                    v
+</span><span>to_write:   x x x
+</span><span>Buf:       [A B C D E X Y _]
+</span><span>read:                 ^
+</span></code></pre>
+<p>on committing the write at this point, there's one more thing we need to care about here:
+we need some way to let the reader know that the last data slot in the buffer is not available to read
+(since writer didn't write to that slot). We do that by introducing a new pointer of watermark. The next read
+will return data from the read pointer to the watermark pointer instead of to the end of the buffer.</p>
+<pre style="background-color:#0f1419;color:#bfbab0;"><code><span>to_write.write(&quot;123&quot;);
+</span><span>to_write.commit()
+</span><span>
+</span><span>write:            v
+</span><span>watermark:                v
+</span><span>Buf:       [1 2 3 D E X Y _]
+</span><span>to_read:              * *
+</span><span>read:                 ^
+</span><span>
+</span><span>to_read = read.readable()
+</span></code></pre>
+<h1 id="interface">Interface</h1>
+<p>with that visualization, we can reduce the interface of our queue as follow in Rust:</p>
+<pre data-lang="rust" style="background-color:#0f1419;color:#bfbab0;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#ff7733;">impl </span><span style="color:#59c2ff;">BipQueue </span><span>{
+</span><span>    </span><span style="color:#ff7733;">fn </span><span style="color:#ffb454;">with_capacity</span><span>(</span><span style="color:#f29718;">len</span><span style="color:#bfbab0cc;">: </span><span style="color:#ff7733;">usize</span><span>) </span><span style="color:#bfbab0cc;">-&gt; </span><span>(QueueReader, QueueWriter)</span><span style="color:#bfbab0cc;">;
+</span><span>}
+</span></code></pre>
+<p>this method will create a buffer with provided capacity and return two halves (reader, writer) of the buffer</p>
+<pre data-lang="rust" style="background-color:#0f1419;color:#bfbab0;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#ff7733;">impl</span><span>&lt;</span><span style="color:#ff7733;">&#39;a</span><span>&gt; </span><span style="color:#59c2ff;">ReadSlice</span><span>&lt;</span><span style="color:#ff7733;">&#39;a</span><span>&gt; {
+</span><span>    </span><span style="color:#ff7733;">fn </span><span style="color:#ffb454;">commit_read</span><span>(</span><span style="color:#f29718;">self</span><span>, </span><span style="color:#f29718;">len</span><span style="color:#bfbab0cc;">: </span><span style="color:#ff7733;">usize</span><span>)</span><span style="color:#bfbab0cc;">;
+</span><span>}
+</span><span style="color:#ff7733;">impl</span><span>&lt;</span><span style="color:#ff7733;">&#39;a</span><span>&gt; </span><span style="font-style:italic;color:#39bae6;">AsRef</span><span>&lt;[</span><span style="color:#ff7733;">u8</span><span>]&gt; </span><span style="color:#ff7733;">for </span><span style="color:#59c2ff;">ReadSlice</span><span>&lt;</span><span style="color:#ff7733;">&#39;a</span><span>&gt; {}</span><span style="color:#bfbab0cc;">;
+</span><span>
+</span><span style="color:#ff7733;">impl </span><span style="color:#59c2ff;">QueueReader </span><span>{
+</span><span>    </span><span style="color:#ff7733;">fn </span><span style="color:#ffb454;">readable</span><span>&lt;</span><span style="color:#ff7733;">&#39;a</span><span>&gt;(</span><span style="color:#f29668;">&amp;</span><span style="color:#ff7733;">&#39;a mut </span><span style="color:#f29718;">self</span><span>) </span><span style="color:#bfbab0cc;">-&gt; </span><span>ReadSlice&lt;</span><span style="color:#ff7733;">&#39;a</span><span>&gt;</span><span style="color:#bfbab0cc;">;
+</span><span>}
+</span></code></pre>
+<p>Reader half of the buffer, provides a <code>readable</code> function that return a slice of available read data to the caller.
+The ReadSlice is readable as <code>&amp;[u8]</code> via the <code>AsRef</code> implementation.
+The ReadSlice has a <code>commit_read</code> function that destroy the slice (<code>self</code> is passed by ownership) and update
+the read pointer in the buffer.</p>
+<pre data-lang="rust" style="background-color:#0f1419;color:#bfbab0;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#ff7733;">impl</span><span>&lt;</span><span style="color:#ff7733;">&#39;a</span><span>&gt; </span><span style="color:#59c2ff;">WriteSlice</span><span>&lt;</span><span style="color:#ff7733;">&#39;a</span><span>&gt; {
+</span><span>    </span><span style="color:#ff7733;">fn </span><span style="color:#ffb454;">commit_write</span><span>(</span><span style="color:#f29718;">self</span><span>, </span><span style="color:#f29718;">len</span><span style="color:#bfbab0cc;">: </span><span style="color:#ff7733;">usize</span><span>)</span><span style="color:#bfbab0cc;">;
+</span><span>}
+</span><span style="color:#ff7733;">impl</span><span>&lt;</span><span style="color:#ff7733;">&#39;a</span><span>&gt; </span><span style="font-style:italic;color:#39bae6;">AsMut</span><span>&lt;[</span><span style="color:#ff7733;">u8</span><span>]&gt; </span><span style="color:#ff7733;">for </span><span style="color:#59c2ff;">WriteSlice</span><span>&lt;</span><span style="color:#ff7733;">&#39;a</span><span>&gt; {}</span><span style="color:#bfbab0cc;">;
+</span><span>
+</span><span style="color:#ff7733;">impl </span><span style="color:#59c2ff;">QueueWriter </span><span>{
+</span><span>    </span><span style="color:#ff7733;">fn </span><span style="color:#ffb454;">reserve</span><span>&lt;</span><span style="color:#ff7733;">&#39;a</span><span>&gt;(</span><span style="color:#f29668;">&amp;</span><span style="color:#ff7733;">&#39;a mut </span><span style="color:#f29718;">self</span><span>, </span><span style="color:#f29718;">len</span><span style="color:#bfbab0cc;">: </span><span style="color:#ff7733;">usize</span><span>) </span><span style="color:#bfbab0cc;">-&gt; </span><span style="font-style:italic;color:#39bae6;">Option</span><span>&lt;WriteSlice&lt;</span><span style="color:#ff7733;">&#39;a</span><span>&gt;&gt;</span><span style="color:#bfbab0cc;">;
+</span><span>}
+</span></code></pre>
+<p>Writer half of the buffer, provides a <code>reserve</code> function for the caller to specify the amount of bytes it want to
+write, if there's not enough space left in the buffer for such reservation, the <code>reserve</code> function will fail and
+return <code>None</code>.
+The ReadSlice is writable as <code>&amp;mut [u8]</code> via the <code>AsMut</code> implementation.
+Similar to the ReadSlice, the WriteSlice has a <code>commit_write</code> function that destroy the slice
+(<code>self</code> is passed by ownership) and update the write pointer in the buffer.</p>
+<h1 id="implementations">Implementations</h1>
+<h2 id="naive-implementation-with-lock">Naive implementation with lock</h2>
+<p>First take, let's just make an implementation that focus on satisfy our interface and works.<br />
+<strong>Important</strong>: When in discovery mode, don't aim for the best possible solution even if you have some idea about it.
+Use an incremental approach, make a working version with the simplest way you can think of, it will help
+you focus on resolving the complexity of the unknown unknowns. Otherwise, the combinatory complexity
+of your best solution and the unknowns can easily drown you.</p>
+<p>Let's make a struct to store our Buffer:</p>
+<pre data-lang="rust" style="background-color:#0f1419;color:#bfbab0;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#ff7733;">struct </span><span style="color:#59c2ff;">BipBuf </span><span>{
+</span><span>    buf</span><span style="color:#bfbab0cc;">: </span><span style="font-style:italic;color:#39bae6;">Box</span><span>&lt;[</span><span style="color:#ff7733;">u8</span><span>]&gt;,
+</span><span>
+</span><span>    read</span><span style="color:#bfbab0cc;">: </span><span style="color:#ff7733;">usize</span><span>,
+</span><span>    write</span><span style="color:#bfbab0cc;">: </span><span style="color:#ff7733;">usize</span><span>,
+</span><span>    watermark</span><span style="color:#bfbab0cc;">: </span><span style="color:#ff7733;">usize</span><span>,
+</span><span>}
+</span></code></pre>
+<p>Nothing special, we have the buffer as an owned slice of u8 (<code>Box&lt;[u8]&gt;</code>),
+a read pointer, write pointer and a watermark pointer. Let's go ahead to the <code>QueueReader</code> &amp; <code>QueueWriter</code> struct.</p>
+<pre data-lang="rust" style="background-color:#0f1419;color:#bfbab0;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#ff7733;">pub struct </span><span style="color:#59c2ff;">QueueReader </span><span>{
+</span><span>    inner</span><span style="color:#bfbab0cc;">: </span><span>Arc&lt;Mutex&lt;BipBuf&gt;&gt;,
+</span><span>}
+</span><span>
+</span><span style="color:#ff7733;">pub struct </span><span style="color:#59c2ff;">QueueWriter </span><span>{
+</span><span>    inner</span><span style="color:#bfbab0cc;">: </span><span>Arc&lt;Mutex&lt;BipBuf&gt;&gt;,
+</span><span>}
+</span></code></pre>
+<p>Reader and Writer is just a reference-counted pointer to a shared mutex of our buffer.
+Let's try to implement the <code>readable</code> function, you can read the full implementation
+<a href="https://github.com/unrealhoang/barbequeue/blob/6fab18eb7bbbfc576c711fdf087c67ef53fe92ea/src/locking.rs#L76-L122">here</a>.</p>
+<pre data-lang="rust" style="background-color:#0f1419;color:#bfbab0;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#ff7733;">impl </span><span style="color:#59c2ff;">QueueReader </span><span>{
+</span><span>    </span><span style="color:#ff7733;">fn </span><span style="color:#ffb454;">readable</span><span>(</span><span style="color:#f29668;">&amp;</span><span style="color:#ff7733;">mut </span><span style="color:#f29718;">self</span><span>) </span><span style="color:#bfbab0cc;">-&gt; </span><span>ReadSlice&lt;&#39;</span><span style="color:#f29668;">_</span><span>&gt; {
+</span><span>        </span><span style="color:#ff7733;">let</span><span> inner </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>inner</span><span style="color:#f29668;">.</span><span style="color:#f07178;">lock</span><span>()</span><span style="color:#f29668;">.</span><span style="color:#f07178;">unwrap</span><span>()</span><span style="color:#bfbab0cc;">;
+</span><span>        </span><span style="font-style:italic;color:#5c6773;">// if read &lt;= write, then the readable portion is from read ptr to write ptr
+</span><span>        </span><span style="color:#ff7733;">if</span><span> inner</span><span style="color:#f29668;">.</span><span>read </span><span style="color:#f29668;">&lt;=</span><span> inner</span><span style="color:#f29668;">.</span><span>write {
+</span><span>            </span><span style="color:#ff7733;">let</span><span> range </span><span style="color:#f29668;">=</span><span> inner</span><span style="color:#f29668;">.</span><span>read</span><span style="color:#f29668;">..</span><span>inner</span><span style="color:#f29668;">.</span><span>write</span><span style="color:#bfbab0cc;">;
+</span><span>            ReadSlice {
+</span><span>                unlocked</span><span style="color:#bfbab0cc;">:</span><span> inner</span><span style="color:#bfbab0cc;">,
+</span><span>                range</span><span style="color:#bfbab0cc;">,
+</span><span>            }
+</span><span>        } </span><span style="color:#ff7733;">else </span><span>{
+</span><span>            </span><span style="font-style:italic;color:#5c6773;">// ...
+</span><span>            </span><span style="font-style:italic;color:#5c6773;">// other cases handling omitted
+</span><span>        }
+</span><span>    }
+</span><span>}
+</span><span>
+</span><span style="color:#ff7733;">impl </span><span style="color:#59c2ff;">ReadSlice</span><span>&lt;&#39;</span><span style="color:#f29668;">_</span><span>&gt; {
+</span><span>    </span><span style="color:#ff7733;">fn </span><span style="color:#ffb454;">commit_read</span><span>(</span><span style="color:#ff7733;">mut </span><span style="color:#f29718;">self</span><span>, </span><span style="color:#f29718;">len</span><span style="color:#bfbab0cc;">: </span><span style="color:#ff7733;">usize</span><span>) {
+</span><span>        </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>unlocked</span><span style="color:#f29668;">.</span><span>read </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>range</span><span style="color:#f29668;">.</span><span>start </span><span style="color:#f29668;">+</span><span> len</span><span style="color:#bfbab0cc;">;
+</span><span>    }
+</span><span>}
+</span></code></pre>
+<p>because our buffer is wrapped inside a mutex, for the caller of <code>readable</code> function to read the buffer's data, it
+must acquire the mutex lock, read the data and then release the lock. You might miss this, but the <code>commit_read</code>
+function is not only update the read pointer, but also release the lock acquired in <code>self.unlocked</code> at the end,
+since it take <code>self</code> by ownership. The usage of these 2 functions will look somewhat like below:</p>
+<pre data-lang="rust" style="background-color:#0f1419;color:#bfbab0;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#ff7733;">loop </span><span>{
+</span><span>    </span><span style="color:#ff7733;">let</span><span> read_slice </span><span style="color:#f29668;">=</span><span> reader</span><span style="color:#f29668;">.</span><span style="color:#f07178;">readable</span><span>()</span><span style="color:#bfbab0cc;">;
+</span><span>    </span><span style="color:#ff7733;">if let </span><span style="font-style:italic;color:#39bae6;">Ok</span><span>(read_len) </span><span style="color:#f29668;">= </span><span style="color:#f07178;">do_something_with_data</span><span>(</span><span style="color:#f29668;">&amp;</span><span>read_slice) {
+</span><span>        read_slice</span><span style="color:#f29668;">.</span><span style="color:#f07178;">commit_read</span><span>(read_len)</span><span style="color:#bfbab0cc;">;
+</span><span>    }
+</span><span>}
+</span></code></pre>
+<p>Here Rust with ownership feature make this very safe &amp; easy to use this API with mutex lock.
+The <code>read_slice</code> will be dropped at the <code>commit_read</code> or at the end of every loop, hence the lock will be
+guaranteed to be released for other thread to access, or even this thread at the next loop. 
+Whereas we must be careful to use the API correctly in other languages, for example, in Go:</p>
+<pre data-lang="go" style="background-color:#0f1419;color:#bfbab0;" class="language-go "><code class="language-go" data-lang="go"><span style="color:#ff7733;">for </span><span>{
+</span><span>    reader</span><span style="color:#f29668;">.</span><span style="color:#ffb454;">AcquireLock</span><span>()
+</span><span>    readSlice </span><span style="color:#f29668;">= </span><span>reader</span><span style="color:#f29668;">.</span><span style="color:#ffb454;">Readable</span><span>()
+</span><span>
+</span><span>    </span><span style="font-style:italic;color:#5c6773;">// do not keep reference to readSlice that lives out of this loop or hellfire will rain down on you
+</span><span>    readLen</span><span style="color:#bfbab0cc;">, </span><span>err </span><span style="color:#f29668;">= </span><span style="color:#ffb454;">doSomethingWithData</span><span>(readSlice</span><span style="color:#f29668;">.</span><span style="color:#ffb454;">Slice</span><span>())
+</span><span>
+</span><span>    </span><span style="color:#ff7733;">if </span><span>err </span><span style="color:#f29668;">== </span><span style="color:#f29718;">nil </span><span>{
+</span><span>        readSlice</span><span style="color:#f29668;">.</span><span style="color:#ffb454;">CommitRead</span><span>(readLen)
+</span><span>    }
+</span><span>
+</span><span>    reader</span><span style="color:#f29668;">.</span><span style="color:#ffb454;">ReleaseLock</span><span>()
+</span><span>}
+</span><span>
+</span><span style="font-style:italic;color:#5c6773;">// or embedded locking inside Readable, release lock inside CommitRead
+</span><span style="font-style:italic;color:#5c6773;">// easier to misuse
+</span><span style="color:#ff7733;">for </span><span>{
+</span><span>    readSlice </span><span style="color:#f29668;">= </span><span>reader</span><span style="color:#f29668;">.</span><span style="color:#ffb454;">Readable</span><span>()
+</span><span>
+</span><span>    </span><span style="font-style:italic;color:#5c6773;">// do not keep reference to readSlice that lives out of this loop or hellfire will rain down on you
+</span><span>    readLen</span><span style="color:#bfbab0cc;">, </span><span>err </span><span style="color:#f29668;">= </span><span style="color:#ffb454;">doSomethingWithData</span><span>(readSlice</span><span style="color:#f29668;">.</span><span style="color:#ffb454;">Slice</span><span>())
+</span><span>
+</span><span>    </span><span style="color:#ff7733;">if </span><span>err </span><span style="color:#f29668;">== </span><span style="color:#f29718;">nil </span><span>{
+</span><span>        readSlice</span><span style="color:#f29668;">.</span><span style="color:#ffb454;">CommitRead</span><span>(readLen)
+</span><span>    } </span><span style="color:#ff7733;">else </span><span>{
+</span><span>        readSlice</span><span style="color:#f29668;">.</span><span style="color:#ffb454;">ReleaseLock</span><span>()
+</span><span>    }
+</span><span>}
+</span><span>
+</span><span style="font-style:italic;color:#5c6773;">// or safer but harder to use closure interface
+</span><span style="color:#ff7733;">for </span><span>{
+</span><span>    reader</span><span style="color:#f29668;">.</span><span style="color:#ffb454;">Readable</span><span>(</span><span style="color:#ff7733;">func</span><span>(</span><span style="color:#ff7733;">readSlice</span><span>) {
+</span><span>        </span><span style="font-style:italic;color:#5c6773;">// do not keep reference to readSlice that lives out of this loop or hellfire will rain down on you
+</span><span>        readLen</span><span style="color:#bfbab0cc;">, </span><span>err </span><span style="color:#f29668;">:= </span><span style="color:#ffb454;">doSomethingWithData</span><span>(readSlice)
+</span><span>
+</span><span>        </span><span style="color:#ff7733;">if </span><span>err </span><span style="color:#f29668;">== </span><span style="color:#f29718;">nil </span><span>{
+</span><span>            readSlice</span><span style="color:#f29668;">.</span><span style="color:#ffb454;">CommitRead</span><span>(readLen)
+</span><span>        }
+</span><span>    })
+</span><span>}
+</span></code></pre>
+<p>or better ergonomics with Java 7's <a href="https://docs.oracle.com/javase/tutorial/essential/exceptions/tryResourceClose.html">Try Resource Block</a></p>
+<pre data-lang="java" style="background-color:#0f1419;color:#bfbab0;" class="language-java "><code class="language-java" data-lang="java"><span style="color:#ff7733;">while</span><span>(</span><span style="color:#f29718;">true</span><span>) {
+</span><span>    </span><span style="color:#ff7733;">try </span><span>(readSlice </span><span style="color:#f29668;">=</span><span> reader</span><span style="color:#f29668;">.</span><span style="color:#ffb454;">readable</span><span>()) {
+</span><span>        </span><span style="font-style:italic;color:#5c6773;">// do not keep reference to readSlice that lives out of this block or hellfire will rain down on you
+</span><span>        </span><span style="color:#ff7733;">int</span><span> readLen </span><span style="color:#f29668;">= </span><span style="color:#ffb454;">doSomethingWithData</span><span>(readSlice</span><span style="color:#f29668;">.</span><span style="color:#ffb454;">slice</span><span>())
+</span><span>        readSlice</span><span style="color:#f29668;">.</span><span style="color:#ffb454;">commitRead</span><span>(readLen)
+</span><span>    }
+</span><span>}
+</span></code></pre>
+<p>Welp, enough language bashing and Rust praising, let's continue with Writer, full implementation
+<a href="https://github.com/unrealhoang/barbequeue/blob/6fab18eb7bbbfc576c711fdf087c67ef53fe92ea/src/locking.rs#L124-L191">here</a>:</p>
+<pre data-lang="rust" style="background-color:#0f1419;color:#bfbab0;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#ff7733;">impl </span><span style="color:#59c2ff;">QueueWriter </span><span>{
+</span><span>    </span><span style="color:#ff7733;">fn </span><span style="color:#ffb454;">reserve</span><span>(</span><span style="color:#f29668;">&amp;</span><span style="color:#ff7733;">mut </span><span style="color:#f29718;">self</span><span>, </span><span style="color:#f29718;">len</span><span style="color:#bfbab0cc;">: </span><span style="color:#ff7733;">usize</span><span>) </span><span style="color:#bfbab0cc;">-&gt; </span><span style="font-style:italic;color:#39bae6;">Option</span><span>&lt;WriteSlice&lt;&#39;</span><span style="color:#f29668;">_</span><span>&gt;&gt; {
+</span><span>        </span><span style="color:#ff7733;">let</span><span> inner </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>inner</span><span style="color:#f29668;">.</span><span style="color:#f07178;">lock</span><span>()</span><span style="color:#f29668;">.</span><span style="color:#f07178;">unwrap</span><span>()</span><span style="color:#bfbab0cc;">;
+</span><span>        </span><span style="color:#ff7733;">if</span><span> inner</span><span style="color:#f29668;">.</span><span>read </span><span style="color:#f29668;">&lt;=</span><span> inner</span><span style="color:#f29668;">.</span><span>write {
+</span><span>            </span><span style="color:#ff7733;">if</span><span> inner</span><span style="color:#f29668;">.</span><span>write </span><span style="color:#f29668;">+</span><span> len </span><span style="color:#f29668;">&lt;</span><span> inner</span><span style="color:#f29668;">.</span><span>owned</span><span style="color:#f29668;">.</span><span style="color:#f07178;">len</span><span>() {
+</span><span>                </span><span style="color:#ff7733;">let</span><span> range </span><span style="color:#f29668;">=</span><span> inner</span><span style="color:#f29668;">.</span><span>write</span><span style="color:#f29668;">..</span><span>inner</span><span style="color:#f29668;">.</span><span>write</span><span style="color:#f29668;">+</span><span>len</span><span style="color:#bfbab0cc;">;
+</span><span>                </span><span style="color:#ff7733;">let</span><span> watermark </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">None</span><span style="color:#bfbab0cc;">;
+</span><span>                </span><span style="font-style:italic;color:#39bae6;">Some</span><span>(WriteSlice {
+</span><span>                    unlocked</span><span style="color:#bfbab0cc;">:</span><span> inner</span><span style="color:#bfbab0cc;">,
+</span><span>                    range</span><span style="color:#bfbab0cc;">,
+</span><span>                    watermark</span><span style="color:#bfbab0cc;">,
+</span><span>                })
+</span><span>            } </span><span style="color:#ff7733;">else </span><span>{
+</span><span>                </span><span style="font-style:italic;color:#5c6773;">// ...
+</span><span>                </span><span style="font-style:italic;color:#5c6773;">// other cases omitted
+</span><span>            }
+</span><span>        } </span><span style="color:#ff7733;">else </span><span>{
+</span><span>            </span><span style="font-style:italic;color:#5c6773;">// ...
+</span><span>            </span><span style="font-style:italic;color:#5c6773;">// other cases omitted
+</span><span>        }
+</span><span>    }
+</span><span>}
+</span><span>
+</span><span style="color:#ff7733;">impl </span><span style="color:#59c2ff;">WriteSlice</span><span>&lt;&#39;</span><span style="color:#f29668;">_</span><span>&gt; {
+</span><span>    </span><span style="color:#ff7733;">fn </span><span style="color:#ffb454;">commit_write</span><span>(</span><span style="color:#ff7733;">mut </span><span style="color:#f29718;">self</span><span>, </span><span style="color:#f29718;">len</span><span style="color:#bfbab0cc;">: </span><span style="color:#ff7733;">usize</span><span>) {
+</span><span>        </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>unlocked</span><span style="color:#f29668;">.</span><span>write </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>range</span><span style="color:#f29668;">.</span><span>start </span><span style="color:#f29668;">+</span><span> len</span><span style="color:#bfbab0cc;">;
+</span><span>        </span><span style="color:#ff7733;">if let </span><span style="font-style:italic;color:#39bae6;">Some</span><span>(last) </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>watermark {
+</span><span>            </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>unlocked</span><span style="color:#f29668;">.</span><span>last </span><span style="color:#f29668;">=</span><span> last</span><span style="color:#bfbab0cc;">;
+</span><span>        }
+</span><span>    }
+</span><span>}
+</span></code></pre>
+<p>typical usage of the write API:</p>
+<pre data-lang="rust" style="background-color:#0f1419;color:#bfbab0;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#ff7733;">loop </span><span>{
+</span><span>    write_data </span><span style="color:#f29668;">= </span><span style="color:#f07178;">get_from_somewhere</span><span>()</span><span style="color:#bfbab0cc;">;
+</span><span>    </span><span style="color:#ff7733;">let mut</span><span> buf </span><span style="color:#f29668;">= </span><span style="color:#ff7733;">loop </span><span>{
+</span><span>        </span><span style="color:#ff7733;">if let </span><span style="font-style:italic;color:#39bae6;">Some</span><span>(b) </span><span style="color:#f29668;">=</span><span> writer</span><span style="color:#f29668;">.</span><span style="color:#f07178;">reserve</span><span>(len_to_write) {
+</span><span>            </span><span style="color:#ff7733;">break</span><span> b</span><span style="color:#bfbab0cc;">;
+</span><span>        }
+</span><span>    }</span><span style="color:#bfbab0cc;">;
+</span><span>    buf</span><span style="color:#f29668;">.</span><span style="color:#f07178;">as_mut</span><span>()</span><span style="color:#f29668;">.</span><span style="color:#f07178;">copy_from_slice</span><span>(write_data)</span><span style="color:#bfbab0cc;">;
+</span><span>    buf</span><span style="color:#f29668;">.</span><span style="color:#f07178;">commit_write</span><span>(len_to_write)</span><span style="color:#bfbab0cc;">;
+</span><span>}
+</span></code></pre>
+<p>So there's not much special in this implementation as we rely on a mutex
+lock to coordinate between the reader &amp; writer. Let's check the performance
+with the benchmark code:</p>
+<pre data-lang="rust" style="background-color:#0f1419;color:#bfbab0;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#ff7733;">fn </span><span style="color:#ffb454;">do_some_reading</span><span>(</span><span style="color:#f29718;">buf</span><span style="color:#bfbab0cc;">: </span><span style="color:#f29668;">&amp;</span><span>[</span><span style="color:#ff7733;">u8</span><span>]) </span><span style="color:#bfbab0cc;">-&gt; </span><span style="color:#ff7733;">u64 </span><span>{
+</span><span>    </span><span style="color:#ff7733;">let mut</span><span> s </span><span style="color:#f29668;">= </span><span style="color:#f29718;">0</span><span style="color:#bfbab0cc;">;
+</span><span>    </span><span style="color:#ff7733;">for</span><span> i </span><span style="color:#f29668;">in </span><span style="color:#f29718;">1</span><span style="color:#f29668;">..</span><span style="color:#f29718;">10 </span><span>{
+</span><span>        </span><span style="color:#ff7733;">for</span><span> b </span><span style="color:#f29668;">in</span><span> buf {
+</span><span>            s </span><span style="color:#f29668;">+= </span><span>(</span><span style="color:#f29668;">*</span><span>b </span><span style="color:#f29668;">- </span><span style="color:#ff7733;">b</span><span style="color:#c2d94c;">&#39;0&#39;</span><span>) </span><span style="color:#f29668;">as </span><span style="color:#ff7733;">u64 </span><span style="color:#f29668;">^</span><span> i</span><span style="color:#bfbab0cc;">;
+</span><span>        }
+</span><span>    }
+</span><span>    s
+</span><span>}
+</span><span>
+</span><span style="color:#ff7733;">fn </span><span style="color:#ffb454;">test_read_write</span><span>&lt;S</span><span style="color:#bfbab0cc;">:</span><span> SpscQueue&gt;(</span><span style="color:#f29718;">buf_size</span><span style="color:#bfbab0cc;">: </span><span style="color:#ff7733;">usize</span><span>, </span><span style="color:#f29718;">iter</span><span style="color:#bfbab0cc;">: </span><span style="color:#ff7733;">usize</span><span>) </span><span style="color:#bfbab0cc;">-&gt; </span><span style="color:#ff7733;">u64 </span><span>{
+</span><span>    </span><span style="color:#ff7733;">let </span><span>(</span><span style="color:#ff7733;">mut</span><span> reader</span><span style="color:#bfbab0cc;">, </span><span style="color:#ff7733;">mut</span><span> writer) </span><span style="color:#f29668;">= </span><span>S</span><span style="color:#f29668;">::</span><span>with_len(buf_size)</span><span style="color:#bfbab0cc;">;
+</span><span>    </span><span style="color:#ff7733;">let</span><span> write_thread </span><span style="color:#f29668;">= </span><span>thread</span><span style="color:#f29668;">::</span><span>spawn(</span><span style="color:#ff7733;">move </span><span style="color:#f29668;">|| </span><span>{
+</span><span>        </span><span style="color:#ff7733;">for</span><span> i </span><span style="color:#f29668;">in </span><span style="color:#f29718;">0</span><span style="color:#f29668;">..</span><span>iter {
+</span><span>            </span><span style="color:#ff7733;">let mut</span><span> buf </span><span style="color:#f29668;">= </span><span style="color:#ff7733;">loop </span><span>{
+</span><span>                </span><span style="color:#ff7733;">if let </span><span style="font-style:italic;color:#39bae6;">Some</span><span>(b) </span><span style="color:#f29668;">=</span><span> writer</span><span style="color:#f29668;">.</span><span style="color:#f07178;">reserve</span><span>(</span><span style="color:#f29718;">11</span><span>) {
+</span><span>                    </span><span style="color:#ff7733;">break</span><span> b</span><span style="color:#bfbab0cc;">;
+</span><span>                }
+</span><span>            }</span><span style="color:#bfbab0cc;">;
+</span><span>            buf</span><span style="color:#f29668;">.</span><span style="color:#f07178;">as_mut</span><span>()</span><span style="color:#f29668;">.</span><span style="color:#f07178;">copy_from_slice</span><span>(</span><span style="color:#ff7733;">b</span><span style="color:#c2d94c;">&quot;12345678901&quot;</span><span>)</span><span style="color:#bfbab0cc;">;
+</span><span>            buf</span><span style="color:#f29668;">.</span><span style="color:#f07178;">commit_write</span><span>(</span><span style="color:#f29718;">11</span><span>)</span><span style="color:#bfbab0cc;">;
+</span><span>        }
+</span><span>    })</span><span style="color:#bfbab0cc;">;
+</span><span>
+</span><span>    </span><span style="color:#ff7733;">let</span><span> read_thread </span><span style="color:#f29668;">= </span><span>thread</span><span style="color:#f29668;">::</span><span>spawn(</span><span style="color:#ff7733;">move </span><span style="color:#f29668;">|| </span><span>{
+</span><span>        </span><span style="color:#ff7733;">let mut</span><span> sum </span><span style="color:#f29668;">= </span><span style="color:#f29718;">0</span><span style="color:#bfbab0cc;">;
+</span><span>        </span><span style="color:#ff7733;">for</span><span> i </span><span style="color:#f29668;">in </span><span style="color:#f29718;">0</span><span style="color:#f29668;">..</span><span>iter {
+</span><span>            </span><span style="color:#ff7733;">let</span><span> buf </span><span style="color:#f29668;">= </span><span style="color:#ff7733;">loop </span><span>{
+</span><span>                </span><span style="color:#ff7733;">let</span><span> r </span><span style="color:#f29668;">=</span><span> reader</span><span style="color:#f29668;">.</span><span style="color:#f07178;">readable</span><span>()</span><span style="color:#bfbab0cc;">;
+</span><span>                </span><span style="color:#ff7733;">if</span><span> r</span><span style="color:#f29668;">.</span><span style="color:#f07178;">as_ref</span><span>()</span><span style="color:#f29668;">.</span><span style="color:#f07178;">len</span><span>() </span><span style="color:#f29668;">&gt;= </span><span style="color:#f29718;">11 </span><span>{
+</span><span>                    </span><span style="color:#ff7733;">break</span><span> r</span><span style="color:#bfbab0cc;">;
+</span><span>                }
+</span><span>            }</span><span style="color:#bfbab0cc;">;
+</span><span>            sum </span><span style="color:#f29668;">+= </span><span style="color:#f07178;">do_some_reading</span><span>(</span><span style="color:#f29668;">&amp;</span><span>buf</span><span style="color:#f29668;">.</span><span style="color:#f07178;">as_ref</span><span>()[</span><span style="color:#f29718;">0</span><span style="color:#f29668;">..</span><span style="color:#f29718;">11</span><span>])</span><span style="color:#bfbab0cc;">;
+</span><span>            </span><span style="color:#f07178;">assert_eq!</span><span>(</span><span style="color:#f29668;">&amp;</span><span>buf</span><span style="color:#f29668;">.</span><span style="color:#f07178;">as_ref</span><span>()[</span><span style="color:#f29718;">0</span><span style="color:#f29668;">..</span><span style="color:#f29718;">11</span><span>]</span><span style="color:#bfbab0cc;">, </span><span style="color:#ff7733;">b</span><span style="color:#c2d94c;">&quot;12345678901&quot;</span><span>)</span><span style="color:#bfbab0cc;">;
+</span><span>            buf</span><span style="color:#f29668;">.</span><span style="color:#f07178;">commit_read</span><span>(</span><span style="color:#f29718;">11</span><span>)</span><span style="color:#bfbab0cc;">;
+</span><span>        }
+</span><span>        sum
+</span><span>    })</span><span style="color:#bfbab0cc;">;
+</span><span>
+</span><span>    write_thread</span><span style="color:#f29668;">.</span><span style="color:#f07178;">join</span><span>()</span><span style="color:#f29668;">.</span><span style="color:#f07178;">unwrap</span><span>()</span><span style="color:#bfbab0cc;">;
+</span><span>    read_thread</span><span style="color:#f29668;">.</span><span style="color:#f07178;">join</span><span>()</span><span style="color:#f29668;">.</span><span style="color:#f07178;">unwrap</span><span>()
+</span><span>}
+</span><span>
+</span><span style="color:#ff7733;">fn </span><span style="color:#ffb454;">bench_locking_bbq</span><span>(</span><span style="color:#f29718;">c</span><span style="color:#bfbab0cc;">: </span><span style="color:#f29668;">&amp;</span><span style="color:#ff7733;">mut</span><span> Criterion) {
+</span><span>    c</span><span style="color:#f29668;">.</span><span style="color:#f07178;">bench_function</span><span>(</span><span style="color:#c2d94c;">&quot;locking_bbq_small_read&quot;</span><span style="color:#bfbab0cc;">, </span><span>|</span><span style="color:#f29718;">b</span><span>| {
+</span><span>        b</span><span style="color:#f29668;">.</span><span style="color:#f07178;">iter</span><span>(|| {
+</span><span>            </span><span style="color:#ff7733;">let</span><span> r </span><span style="color:#f29668;">= </span><span>test_read_write</span><span style="color:#f29668;">::</span><span>&lt;bbq</span><span style="color:#f29668;">::</span><span>locking</span><span style="color:#f29668;">::</span><span>Locking&gt;(</span><span style="color:#f29718;">1000</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29718;">100_000</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29718;">2</span><span>)</span><span style="color:#bfbab0cc;">;
+</span><span>            </span><span style="color:#f07178;">black_box</span><span>(r)</span><span style="color:#bfbab0cc;">;
+</span><span>        })</span><span style="color:#bfbab0cc;">;
+</span><span>    })</span><span style="color:#bfbab0cc;">;
+</span><span>    c</span><span style="color:#f29668;">.</span><span style="color:#f07178;">bench_function</span><span>(</span><span style="color:#c2d94c;">&quot;locking_bbq_big_read&quot;</span><span style="color:#bfbab0cc;">, </span><span>|</span><span style="color:#f29718;">b</span><span>| {
+</span><span>        b</span><span style="color:#f29668;">.</span><span style="color:#f07178;">iter</span><span>(|| {
+</span><span>            </span><span style="color:#ff7733;">let</span><span> r </span><span style="color:#f29668;">= </span><span>test_read_write</span><span style="color:#f29668;">::</span><span>&lt;bbq</span><span style="color:#f29668;">::</span><span>locking</span><span style="color:#f29668;">::</span><span>Locking&gt;(</span><span style="color:#f29718;">1000</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29718;">100_000</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29718;">50</span><span>)</span><span style="color:#bfbab0cc;">;
+</span><span>            </span><span style="color:#f07178;">black_box</span><span>(r)</span><span style="color:#bfbab0cc;">;
+</span><span>        })</span><span style="color:#bfbab0cc;">;
+</span><span>    })</span><span style="color:#bfbab0cc;">;
+</span><span>}
+</span></code></pre>
+<p>here we have 2 thread running in parallel with 1 writer trying to write 
+100K times with 11 bytes payload and reader trying to read 11 bytes payload
+100K times. We split them into 2 tests: 1 where we only do a small read over
+the data we received at Reader side, another for when we will loop over the data
+multiple times (50) to simulate some long workload at reader.</p>
+<p><strong>Result</strong>: </p>
+<pre style="background-color:#0f1419;color:#bfbab0;"><code><span>locking_bbq_small_read  time:   [44.760 ms 46.485 ms 48.209 ms]
+</span><span>locking_bbq_big_read    time:   [60.818 ms 62.834 ms 64.762 ms]
+</span></code></pre>
+<p>So as we expected, time spending at reader side directly increase the overall time result.
+Let's try to improve.</p>
+<h2 id="improved-lock-implementation">Improved lock implementation</h2>
+<p>With the previous implement we can make some observations: </p>
+<ul>
+<li>
+<p>While the <code>read_slice</code> is live, the <code>writer</code> can't do anything and vice versa. 
+The execution timeline of <code>reader</code> and <code>writer</code> can be visualized as follow:</p>
+<!--
+  @startuml
+  !theme mars
+  participant Reader
+  participant Buf
+  participant Writer
+
+  Writer -> Buf: reserve()
+
+  Buf -> Writer: lock acquired
+  activate Buf #Red
+
+  Reader -> Buf: readable()
+
+  Writer -> Writer: write
+
+  Writer -> Buf: commit_write()
+  deactivate Buf
+
+  Buf -> Reader: lock acquired
+  activate Buf #Blue
+
+  Writer -> Buf: reserve()
+
+  Reader -> Reader: read
+
+  Reader -> Buf: commit_read()
+  deactivate Buf
+
+  Buf -> Writer: lock acquired
+  activate Buf #Red
+  @enduml
+  -->
+<p><img src="/images/bipbuffer-lock-1.png" alt="BipBuffer lock execution timeline 1" /></p>
+</li>
+<li>
+<p>The <code>read_slice</code> and <code>write_slice</code> never overlap at any point in time:</p>
+<pre style="background-color:#0f1419;color:#bfbab0;"><code><span>write_slice              [           ]
+</span><span>buf          [R R R R R R W W W W W W _ _ _ _ _ _ _]
+</span><span>read_slice   [           ]
+</span><span>
+</span><span>or
+</span><span>
+</span><span>write_slice                            [     ]
+</span><span>buf          [_ _ _ R R R R R R _ _ _ _ W W W _ _ _]
+</span><span>read_slice         [           ]
+</span><span>
+</span><span>or if the write wrapped around:
+</span><span>
+</span><span>watermark                                   v
+</span><span>write_slice  [   ]
+</span><span>buf          [W W _ _ _ _ R R R R R R _ _ _ _ _ _ _]
+</span><span>read_slice               [           ]
+</span></code></pre>
+<p>Point is, according our rule of processing (base on read pointer, write pointer and watermark pointer),
+we never hand out a slice of data that is accessible from both <code>writer</code> thread and <code>reader</code> thread.</p>
+</li>
+</ul>
+<p><strong>=&gt;</strong> We don't have to keep the lock to protect <code>read_slice</code> and <code>write_slice</code>. We should only lock when
+trying to read or write to the pointers (<code>read</code>, <code>write</code>, <code>watermark</code>). We want to restructure our structs a bit.
+Full code could be found <a href="https://github.com/unrealhoang/barbequeue/blob/615ed62bb9aec21087de5af448959c769e771393/src/lock_ptr.rs">here</a></p>
+<pre data-lang="rust" style="background-color:#0f1419;color:#bfbab0;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#ff7733;">struct </span><span style="color:#59c2ff;">BufPtrs </span><span>{
+</span><span>    read</span><span style="color:#bfbab0cc;">: </span><span style="color:#ff7733;">usize</span><span>,
+</span><span>    write</span><span style="color:#bfbab0cc;">: </span><span style="color:#ff7733;">usize</span><span>,
+</span><span>    last</span><span style="color:#bfbab0cc;">: </span><span style="color:#ff7733;">usize</span><span>,
+</span><span>}
+</span><span>
+</span><span style="color:#ff7733;">struct </span><span style="color:#59c2ff;">BipBuf </span><span>{
+</span><span>    owned</span><span style="color:#bfbab0cc;">: </span><span style="font-style:italic;color:#39bae6;">Box</span><span>&lt;[</span><span style="color:#ff7733;">u8</span><span>]&gt;,
+</span><span>    </span><span style="font-style:italic;color:#5c6773;">// length of the owned buffer
+</span><span>    len</span><span style="color:#bfbab0cc;">: </span><span style="color:#ff7733;">usize</span><span>,
+</span><span>    </span><span style="font-style:italic;color:#5c6773;">// pointer to the beginning of the owned buffer
+</span><span>    buf</span><span style="color:#bfbab0cc;">: </span><span style="color:#ff7733;">*mut u8</span><span>,
+</span><span>    ptrs</span><span style="color:#bfbab0cc;">: </span><span>Mutex&lt;BufPtrs&gt;,
+</span><span>}
+</span><span>
+</span><span style="color:#ff7733;">pub struct </span><span style="color:#59c2ff;">Reader </span><span>{
+</span><span>    inner</span><span style="color:#bfbab0cc;">: </span><span>Arc&lt;BipBuf&gt;,
+</span><span>}
+</span><span>
+</span><span style="color:#ff7733;">pub struct </span><span style="color:#59c2ff;">Writer </span><span>{
+</span><span>    inner</span><span style="color:#bfbab0cc;">: </span><span>Arc&lt;BipBuf&gt;,
+</span><span>}
+</span><span>
+</span><span style="color:#ff7733;">pub struct </span><span style="color:#59c2ff;">ReadSlice</span><span>&lt;</span><span style="color:#ff7733;">&#39;a</span><span>&gt; {
+</span><span>    reader</span><span style="color:#bfbab0cc;">: </span><span style="color:#f29668;">&amp;</span><span style="color:#ff7733;">&#39;a mut</span><span> Reader,
+</span><span>    range</span><span style="color:#bfbab0cc;">: </span><span>Range&lt;</span><span style="color:#ff7733;">usize</span><span>&gt;,
+</span><span>}
+</span><span>
+</span><span style="color:#ff7733;">pub struct </span><span style="color:#59c2ff;">WriteSlice</span><span>&lt;</span><span style="color:#ff7733;">&#39;a</span><span>&gt; {
+</span><span>    writer</span><span style="color:#bfbab0cc;">: </span><span style="color:#f29668;">&amp;</span><span style="color:#ff7733;">&#39;a mut</span><span> Writer,
+</span><span>    range</span><span style="color:#bfbab0cc;">: </span><span>Range&lt;</span><span style="color:#ff7733;">usize</span><span>&gt;,
+</span><span>    watermark</span><span style="color:#bfbab0cc;">: </span><span style="font-style:italic;color:#39bae6;">Option</span><span>&lt;</span><span style="color:#ff7733;">usize</span><span>&gt;,
+</span><span>}
+</span></code></pre>
+<p>instead of Mutex wrapping the buffer before, now we only wrap/protect the pointers. But in order to split the data
+buffer into disjointed mutable slices, similar to
+<a href="https://doc.rust-lang.org/std/primitive.slice.html#method.split_at_mut">split_at_mut</a> with custom split logic, we
+must venture to the scary <code>unsafe</code> world to use the pointer and let Rust know, because there's no safe way? (if you can, please let me know)
+to communicate the custom access guarantee to Rust. 
+Let's change the logic code to accommodate the new structure.</p>
+<pre data-lang="rust" style="background-color:#0f1419;color:#bfbab0;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#ff7733;">impl </span><span style="color:#59c2ff;">QueueReader </span><span>{
+</span><span>    </span><span style="color:#ff7733;">fn </span><span style="color:#ffb454;">readable</span><span>(</span><span style="color:#f29668;">&amp;</span><span style="color:#ff7733;">mut </span><span style="color:#f29718;">self</span><span>) </span><span style="color:#bfbab0cc;">-&gt; </span><span>ReadSlice&lt;&#39;</span><span style="color:#f29668;">_</span><span>&gt; {
+</span><span>        </span><span style="color:#ff7733;">let</span><span> lock </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>inner</span><span style="color:#f29668;">.</span><span>ptrs</span><span style="color:#f29668;">.</span><span style="color:#f07178;">lock</span><span>()</span><span style="color:#f29668;">.</span><span style="color:#f07178;">unwrap</span><span>()</span><span style="color:#bfbab0cc;">;
+</span><span>        </span><span style="color:#ff7733;">if</span><span> lock</span><span style="color:#f29668;">.</span><span>read </span><span style="color:#f29668;">&lt;=</span><span> lock</span><span style="color:#f29668;">.</span><span>write {
+</span><span>            </span><span style="color:#ff7733;">let</span><span> range </span><span style="color:#f29668;">=</span><span> lock</span><span style="color:#f29668;">.</span><span>read</span><span style="color:#f29668;">..</span><span>lock</span><span style="color:#f29668;">.</span><span>write</span><span style="color:#bfbab0cc;">;
+</span><span>            </span><span style="color:#f07178;">drop</span><span>(lock)</span><span style="color:#bfbab0cc;">;
+</span><span>            ReadSlice {
+</span><span>                reader</span><span style="color:#bfbab0cc;">: </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#bfbab0cc;">,
+</span><span>                range</span><span style="color:#bfbab0cc;">,
+</span><span>            }
+</span><span>        } </span><span style="color:#ff7733;">else </span><span>{
+</span><span>            </span><span style="font-style:italic;color:#5c6773;">// ...
+</span><span>            </span><span style="font-style:italic;color:#5c6773;">// other cases handling omitted
+</span><span>        }
+</span><span>    }
+</span><span>}
+</span><span>
+</span><span style="color:#ff7733;">impl </span><span style="color:#59c2ff;">ReadSlice</span><span>&lt;&#39;</span><span style="color:#f29668;">_</span><span>&gt; {
+</span><span>    </span><span style="color:#ff7733;">fn </span><span style="color:#ffb454;">commit_read</span><span>(</span><span style="color:#ff7733;">mut </span><span style="color:#f29718;">self</span><span>, </span><span style="color:#f29718;">len</span><span style="color:#bfbab0cc;">: </span><span style="color:#ff7733;">usize</span><span>) {
+</span><span>        </span><span style="color:#ff7733;">if</span><span> len </span><span style="color:#f29668;">&gt; </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>range</span><span style="color:#f29668;">.</span><span>end </span><span style="color:#f29668;">- </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>range</span><span style="color:#f29668;">.</span><span>start {
+</span><span>            </span><span style="color:#f07178;">panic!</span><span>(</span><span style="color:#c2d94c;">&quot;commit read larger than readable range&quot;</span><span>)</span><span style="color:#bfbab0cc;">;
+</span><span>        }
+</span><span>        </span><span style="color:#ff7733;">let mut</span><span> lock </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>reader</span><span style="color:#f29668;">.</span><span>inner</span><span style="color:#f29668;">.</span><span>ptrs</span><span style="color:#f29668;">.</span><span style="color:#f07178;">lock</span><span>()</span><span style="color:#f29668;">.</span><span style="color:#f07178;">unwrap</span><span>()</span><span style="color:#bfbab0cc;">;
+</span><span>        lock</span><span style="color:#f29668;">.</span><span>read </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>range</span><span style="color:#f29668;">.</span><span>start </span><span style="color:#f29668;">+</span><span> len</span><span style="color:#bfbab0cc;">;
+</span><span>    }
+</span><span>}
+</span></code></pre>
+<p>So now we only lock, read the pointers, then release the lock, on commit, lock again to update the pointers, 
+then release, apply the same changes to writer:</p>
+<pre data-lang="rust" style="background-color:#0f1419;color:#bfbab0;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#ff7733;">impl </span><span style="color:#59c2ff;">Writer </span><span>{
+</span><span>    </span><span style="color:#ff7733;">fn </span><span style="color:#ffb454;">reserve</span><span>(</span><span style="color:#f29668;">&amp;</span><span style="color:#ff7733;">mut </span><span style="color:#f29718;">self</span><span>, </span><span style="color:#f29718;">len</span><span style="color:#bfbab0cc;">: </span><span style="color:#ff7733;">usize</span><span>) </span><span style="color:#bfbab0cc;">-&gt; </span><span style="font-style:italic;color:#39bae6;">Option</span><span>&lt;WriteSlice&lt;&#39;</span><span style="color:#f29668;">_</span><span>&gt;&gt; {
+</span><span>        </span><span style="color:#ff7733;">let</span><span> lock </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>inner</span><span style="color:#f29668;">.</span><span>ptrs</span><span style="color:#f29668;">.</span><span style="color:#f07178;">lock</span><span>()</span><span style="color:#f29668;">.</span><span style="color:#f07178;">unwrap</span><span>()</span><span style="color:#bfbab0cc;">;
+</span><span>        </span><span style="color:#ff7733;">let</span><span> buf_len </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>inner</span><span style="color:#f29668;">.</span><span>len</span><span style="color:#bfbab0cc;">;
+</span><span>        </span><span style="color:#ff7733;">if</span><span> lock</span><span style="color:#f29668;">.</span><span>read </span><span style="color:#f29668;">&lt;=</span><span> lock</span><span style="color:#f29668;">.</span><span>write {
+</span><span>            </span><span style="color:#ff7733;">if</span><span> lock</span><span style="color:#f29668;">.</span><span>write </span><span style="color:#f29668;">+</span><span> len </span><span style="color:#f29668;">&lt;</span><span> buf_len {
+</span><span>                </span><span style="color:#ff7733;">let</span><span> range </span><span style="color:#f29668;">=</span><span> lock</span><span style="color:#f29668;">.</span><span>write</span><span style="color:#f29668;">..</span><span>lock</span><span style="color:#f29668;">.</span><span>write </span><span style="color:#f29668;">+</span><span> len</span><span style="color:#bfbab0cc;">;
+</span><span>                </span><span style="color:#ff7733;">let</span><span> watermark </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">None</span><span style="color:#bfbab0cc;">;
+</span><span>                </span><span style="color:#f07178;">drop</span><span>(lock)</span><span style="color:#bfbab0cc;">;
+</span><span>                </span><span style="font-style:italic;color:#39bae6;">Some</span><span>(WriteSlice {
+</span><span>                    range</span><span style="color:#bfbab0cc;">,
+</span><span>                    watermark</span><span style="color:#bfbab0cc;">,
+</span><span>                    writer</span><span style="color:#bfbab0cc;">: </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#bfbab0cc;">,
+</span><span>                })
+</span><span>            } </span><span style="color:#ff7733;">else </span><span>{
+</span><span>                </span><span style="font-style:italic;color:#5c6773;">// ...
+</span><span>                </span><span style="font-style:italic;color:#5c6773;">// other cases handling omitted
+</span><span>            }
+</span><span>        } </span><span style="color:#ff7733;">else </span><span>{
+</span><span>            </span><span style="font-style:italic;color:#5c6773;">// ...
+</span><span>            </span><span style="font-style:italic;color:#5c6773;">// other cases handling omitted
+</span><span>        }
+</span><span>    }
+</span><span>}
+</span><span>
+</span><span style="color:#ff7733;">impl </span><span style="color:#59c2ff;">WriteSlice</span><span>&lt;&#39;</span><span style="color:#f29668;">_</span><span>&gt; {
+</span><span>    </span><span style="color:#ff7733;">fn </span><span style="color:#ffb454;">commit_write</span><span>(</span><span style="color:#f29718;">self</span><span>, </span><span style="color:#f29718;">len</span><span style="color:#bfbab0cc;">: </span><span style="color:#ff7733;">usize</span><span>) {
+</span><span>        </span><span style="color:#ff7733;">let mut</span><span> lock </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>writer</span><span style="color:#f29668;">.</span><span>inner</span><span style="color:#f29668;">.</span><span>ptrs</span><span style="color:#f29668;">.</span><span style="color:#f07178;">lock</span><span>()</span><span style="color:#f29668;">.</span><span style="color:#f07178;">unwrap</span><span>()</span><span style="color:#bfbab0cc;">;
+</span><span>        lock</span><span style="color:#f29668;">.</span><span>write </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>range</span><span style="color:#f29668;">.</span><span>start </span><span style="color:#f29668;">+</span><span> len</span><span style="color:#bfbab0cc;">;
+</span><span>        </span><span style="color:#ff7733;">if let </span><span style="font-style:italic;color:#39bae6;">Some</span><span>(last) </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>watermark {
+</span><span>            lock</span><span style="color:#f29668;">.</span><span>last </span><span style="color:#f29668;">=</span><span> last</span><span style="color:#bfbab0cc;">;
+</span><span>        }
+</span><span>    }
+</span><span>}
+</span></code></pre>
+<p>Done, now, observing the new benchmark result:</p>
+<p><strong>Result</strong>:</p>
+<pre style="background-color:#0f1419;color:#bfbab0;"><code><span>locking_bbq_small_read     time:   [44.760 ms 46.485 ms 48.209 ms]
+</span><span>locking_bbq_big_read       time:   [60.818 ms 62.834 ms 64.762 ms]
+</span><span>
+</span><span>locking_bbq_ptr_small_read time:   [45.901 ms 47.905 ms 49.911 ms]
+</span><span>locking_bbq_ptr_big_read   time:   [41.289 ms 43.230 ms 45.257 ms]
+</span></code></pre>
+<p>The result for small read is practically not change at all, or even a little worse, because
+the process for 1 cycle become: lock -&gt; read ptr -&gt; release -&gt; read data -&gt; lock -&gt; update ptr -&gt; release.
+The extra locks &amp; releases causing more harm than good in the small read case.
+But we see an obvious improvement over the big read case, where not only the read time doesn't impact the 
+result time negatively, it performs better than the small read time, this is because more time spent reading
+means less contention on the lock with Writer side. </p>
+<p>So, on the big read case, we have improved the time by 50%.
+Let's review the changed execution timeline:</p>
+<!--
+@startuml
+!theme mars
+participant Reader
+participant Buf
+participant Writer
+
+Writer -> Buf: reserve()
+
+Buf -> Writer: lock acquired
+activate Buf #Red
+
+Reader -> Buf: readable()
+
+Writer -> Buf: read pointers
+deactivate Buf
+Buf -> Writer: write_slice
+
+Buf -> Reader: lock acquired
+activate Buf #Blue
+Reader -> Buf: read pointers
+deactivate Buf
+
+par in parallel
+Buf -> Reader: read_slice
+
+Writer -> Writer: write
+Reader -> Reader: read
+
+Writer -> Buf: commit_write()
+end
+
+Buf -> Writer: lock acquired
+activate Buf #Red
+
+Reader -> Buf: commit_read()
+Writer -> Buf: update pointers
+deactivate Buf
+
+Buf -> Reader: lock acquired
+activate Buf #Blue
+Reader -> Buf: update pointers
+deactivate Buf
+
+Writer -> Buf: reserve()
+
+Buf -> Writer: lock acquired
+activate Buf #Red
+@enduml
+-->
+<p><img src="/images/bipbuffer-lock-2.png" alt="BipBuffer lock execution timeline 2" /></p>
+<p>We can see that the locked period of the buffer is smaller, allowing reader and writer to have
+a lot more time doing execution in parallel instead of waiting for each other.
+In the real usage of this library, when <code>read</code> and <code>write</code> portion is doing more (and takes more time),
+the different between the first implementation and this one will be even more drastic.</p>
+<h2 id="second-improvement-on-locking-implementation">Second improvement on locking implementation</h2>
+<p>Is there any room for improvement? Let's zoom into the part of the code where the lock is acquired, we see:</p>
+<ul>
+<li>
+<p><code>readable()</code> and <code>reserve()</code> only read from the pointers, <code>commit_read()</code> and <code>commit_write()</code> only write
+to the pointers.</p>
+</li>
+<li>
+<p>We could split the lock to lock each of the pointer separately, this is possible because either:</p>
+<ul>
+<li>The <code>read</code> pointer got updated (by <code>commit_read()</code> function).</li>
+<li>The <code>write</code> pointer got updated (by <code>commit_write()</code> function), or</li>
+<li>The <code>write</code> and <code>watermark</code> pointer got updated at the same time (by <code>commit_write()</code> function).
+In this case, let's review the guarantee that we actually require for them by considering the cases
+where they got updated separately:
+<ul>
+<li><code>write</code> got updated (wrapped around) and <code>watermark</code> is not:</li>
+</ul>
+<pre style="background-color:#0f1419;color:#bfbab0;"><code><span>watermark
+</span><span>write             v
+</span><span>buf          [W W _ _ _ _ R R R R R R _ _ _ _ _ _ _]
+</span><span>read                                  ^
+</span></code></pre>
+This is obviously not good, since reader see the <code>write</code> pointer wrapped around but dont see the
+position of the watermark to read to.
+<ul>
+<li><code>watermark</code> got updated and <code>write</code> pointer is not:</li>
+</ul>
+<pre style="background-color:#0f1419;color:#bfbab0;"><code><span>watermark                                       v
+</span><span>write                                           v
+</span><span>buf          [W W _ _ _ _ R R R R R R _ _ _ _ _ _ _]
+</span><span>read                                  ^
+</span></code></pre>
+This is ok, as reader side can still get the readable slice from the <code>read</code> pointer to the <code>write</code>
+pointer.<br />
+So the invariant here is: 
+<strong><code>watermark</code> must be seen updated before <code>write</code> pointer wrap around effect is seen.</strong></li>
+</ul>
+</li>
+<li>
+<p>Reader knows the position of <code>read</code> pointer entirely (since it's the one who write them) =&gt; instead
+of claiming lock to read the <code>read</code> pointer, it could keep a local value of the <code>read</code> pointer and use it.</p>
+</li>
+<li>
+<p>Similarly, Writer knows the position of <code>write</code> pointer =&gt; no lock required for reading.</p>
+</li>
+<li>
+<p>Also, we could cache the <code>read</code> pointer for Writer once we load it, same for <code>write</code> and <code>watermark</code> pointer
+for Reader. Only load locked pointers when absolutely need it.</p>
+</li>
+</ul>
+<p>With all that, let's try to apply it:</p>
+<pre data-lang="rust" style="background-color:#0f1419;color:#bfbab0;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#ff7733;">struct </span><span style="color:#59c2ff;">BufPtrs </span><span>{
+</span><span>    read</span><span style="color:#bfbab0cc;">: </span><span>Mutex&lt;</span><span style="color:#ff7733;">usize</span><span>&gt;,
+</span><span>    write</span><span style="color:#bfbab0cc;">: </span><span>Mutex&lt;</span><span style="color:#ff7733;">usize</span><span>&gt;,
+</span><span>    watermark</span><span style="color:#bfbab0cc;">: </span><span>Mutex&lt;</span><span style="color:#ff7733;">usize</span><span>&gt;,
+</span><span>}
+</span><span>
+</span><span style="color:#ff7733;">struct </span><span style="color:#59c2ff;">BipBuf </span><span>{
+</span><span>    owned</span><span style="color:#bfbab0cc;">: </span><span style="font-style:italic;color:#39bae6;">Box</span><span>&lt;[</span><span style="color:#ff7733;">u8</span><span>]&gt;,
+</span><span>    len</span><span style="color:#bfbab0cc;">: </span><span style="color:#ff7733;">usize</span><span>,
+</span><span>    buf</span><span style="color:#bfbab0cc;">: </span><span style="color:#ff7733;">*mut u8</span><span>,
+</span><span>    ptrs</span><span style="color:#bfbab0cc;">:</span><span> BufPtrs,
+</span><span>}
+</span><span>
+</span><span style="color:#ff7733;">pub struct </span><span style="color:#59c2ff;">Reader </span><span>{
+</span><span>    inner</span><span style="color:#bfbab0cc;">: </span><span>Arc&lt;BipBuf&gt;,
+</span><span>    read</span><span style="color:#bfbab0cc;">: </span><span style="color:#ff7733;">usize</span><span>,
+</span><span>}
+</span><span>
+</span><span style="color:#ff7733;">pub struct </span><span style="color:#59c2ff;">Writer </span><span>{
+</span><span>    inner</span><span style="color:#bfbab0cc;">: </span><span>Arc&lt;BipBuf&gt;,
+</span><span>    write</span><span style="color:#bfbab0cc;">: </span><span style="color:#ff7733;">usize</span><span>,
+</span><span>    cache_read</span><span style="color:#bfbab0cc;">: </span><span style="color:#ff7733;">usize</span><span>,
+</span><span>}
+</span><span>
+</span><span style="color:#ff7733;">pub struct </span><span style="color:#59c2ff;">ReadableSlice</span><span>&lt;</span><span style="color:#ff7733;">&#39;a</span><span>&gt; {
+</span><span>    reader</span><span style="color:#bfbab0cc;">: </span><span style="color:#f29668;">&amp;</span><span style="color:#ff7733;">&#39;a mut</span><span> Reader,
+</span><span>    range</span><span style="color:#bfbab0cc;">: </span><span>Range&lt;</span><span style="color:#ff7733;">usize</span><span>&gt;,
+</span><span>}
+</span><span>
+</span><span style="color:#ff7733;">pub struct </span><span style="color:#59c2ff;">WritableSlice</span><span>&lt;</span><span style="color:#ff7733;">&#39;a</span><span>&gt; {
+</span><span>    writer</span><span style="color:#bfbab0cc;">: </span><span style="color:#f29668;">&amp;</span><span style="color:#ff7733;">&#39;a mut</span><span> Writer,
+</span><span>    range</span><span style="color:#bfbab0cc;">: </span><span>Range&lt;</span><span style="color:#ff7733;">usize</span><span>&gt;,
+</span><span>    watermark</span><span style="color:#bfbab0cc;">: </span><span style="font-style:italic;color:#39bae6;">Option</span><span>&lt;</span><span style="color:#ff7733;">usize</span><span>&gt;,
+</span><span>}
+</span></code></pre>
+<p>the changed implementation:</p>
+<pre data-lang="rust" style="background-color:#0f1419;color:#bfbab0;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#ff7733;">impl </span><span style="color:#59c2ff;">Reader </span><span>{
+</span><span>    </span><span style="color:#ff7733;">fn </span><span style="color:#ffb454;">readable</span><span>(</span><span style="color:#f29668;">&amp;</span><span style="color:#ff7733;">mut </span><span style="color:#f29718;">self</span><span>) </span><span style="color:#bfbab0cc;">-&gt; </span><span>ReadableSlice&lt;&#39;</span><span style="color:#f29668;">_</span><span>&gt; {
+</span><span>        </span><span style="font-style:italic;color:#5c6773;">// always lock write before lock watermark
+</span><span>        </span><span style="color:#ff7733;">let</span><span> lock_write </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>inner</span><span style="color:#f29668;">.</span><span>ptrs</span><span style="color:#f29668;">.</span><span>write</span><span style="color:#f29668;">.</span><span style="color:#f07178;">lock</span><span>()</span><span style="color:#f29668;">.</span><span style="color:#f07178;">unwrap</span><span>()</span><span style="color:#bfbab0cc;">;
+</span><span>        </span><span style="color:#ff7733;">if </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>read </span><span style="color:#f29668;">&lt;= *</span><span>lock_write {
+</span><span>            </span><span style="color:#ff7733;">let</span><span> range </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>read</span><span style="color:#f29668;">..*</span><span>lock_write</span><span style="color:#bfbab0cc;">;
+</span><span>            </span><span style="color:#f07178;">drop</span><span>(lock_write)</span><span style="color:#bfbab0cc;">;
+</span><span>            ReadableSlice {
+</span><span>                reader</span><span style="color:#bfbab0cc;">: </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#bfbab0cc;">,
+</span><span>                range</span><span style="color:#bfbab0cc;">,
+</span><span>            }
+</span><span>        } </span><span style="color:#ff7733;">else </span><span>{
+</span><span>            </span><span style="color:#ff7733;">let</span><span> lock_watermark </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>inner</span><span style="color:#f29668;">.</span><span>ptrs</span><span style="color:#f29668;">.</span><span>watermark</span><span style="color:#f29668;">.</span><span style="color:#f07178;">lock</span><span>()</span><span style="color:#f29668;">.</span><span style="color:#f07178;">unwrap</span><span>()</span><span style="color:#bfbab0cc;">;
+</span><span>            </span><span style="font-style:italic;color:#5c6773;">// read &gt; write -&gt; wrapped around, readable from read to watermark
+</span><span>            </span><span style="color:#ff7733;">if </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>read </span><span style="color:#f29668;">== *</span><span>lock_watermark {
+</span><span>                </span><span style="color:#ff7733;">let</span><span> range </span><span style="color:#f29668;">= </span><span style="color:#f29718;">0</span><span style="color:#f29668;">..*</span><span>lock_write</span><span style="color:#bfbab0cc;">;
+</span><span>                </span><span style="color:#f07178;">drop</span><span>(lock_watermark)</span><span style="color:#bfbab0cc;">;
+</span><span>                </span><span style="color:#f07178;">drop</span><span>(lock_write)</span><span style="color:#bfbab0cc;">;
+</span><span>                ReadableSlice {
+</span><span>                    reader</span><span style="color:#bfbab0cc;">: </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#bfbab0cc;">,
+</span><span>                    range</span><span style="color:#bfbab0cc;">,
+</span><span>                }
+</span><span>            } </span><span style="color:#ff7733;">else </span><span>{
+</span><span>                </span><span style="font-style:italic;color:#5c6773;">// ...
+</span><span>                </span><span style="font-style:italic;color:#5c6773;">// other cases handling omitted
+</span><span>            }
+</span><span>        }
+</span><span>    }
+</span><span>}
+</span><span>
+</span><span style="color:#ff7733;">impl </span><span style="color:#59c2ff;">ReadableSlice</span><span>&lt;&#39;</span><span style="color:#f29668;">_</span><span>&gt; {
+</span><span>    </span><span style="color:#ff7733;">fn </span><span style="color:#ffb454;">commit_read</span><span>(</span><span style="color:#ff7733;">mut </span><span style="color:#f29718;">self</span><span>, </span><span style="color:#f29718;">len</span><span style="color:#bfbab0cc;">: </span><span style="color:#ff7733;">usize</span><span>) {
+</span><span>        </span><span style="color:#ff7733;">let mut</span><span> lock </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>reader</span><span style="color:#f29668;">.</span><span>inner</span><span style="color:#f29668;">.</span><span>ptrs</span><span style="color:#f29668;">.</span><span>read</span><span style="color:#f29668;">.</span><span style="color:#f07178;">lock</span><span>()</span><span style="color:#f29668;">.</span><span style="color:#f07178;">unwrap</span><span>()</span><span style="color:#bfbab0cc;">;
+</span><span>        </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>reader</span><span style="color:#f29668;">.</span><span>read </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>range</span><span style="color:#f29668;">.</span><span>start </span><span style="color:#f29668;">+</span><span> len</span><span style="color:#bfbab0cc;">;
+</span><span>        </span><span style="color:#f29668;">*</span><span>lock </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>reader</span><span style="color:#f29668;">.</span><span>read</span><span style="color:#bfbab0cc;">;
+</span><span>    }
+</span><span>}
+</span></code></pre>
+<p>So Reader doesn't have to lock <code>read</code> ptr on <code>readable</code>, only lock to write
+it on <code>commit_read()</code>.</p>
+<pre data-lang="rust" style="background-color:#0f1419;color:#bfbab0;" class="language-rust "><code class="language-rust" data-lang="rust"><span style="color:#ff7733;">impl </span><span style="color:#59c2ff;">Writer </span><span>{
+</span><span>    </span><span style="color:#ff7733;">fn </span><span style="color:#ffb454;">reserve</span><span>(</span><span style="color:#f29668;">&amp;</span><span style="color:#ff7733;">mut </span><span style="color:#f29718;">self</span><span>, </span><span style="color:#f29718;">len</span><span style="color:#bfbab0cc;">: </span><span style="color:#ff7733;">usize</span><span>) </span><span style="color:#bfbab0cc;">-&gt; </span><span style="font-style:italic;color:#39bae6;">Option</span><span>&lt;WritableSlice&lt;&#39;</span><span style="color:#f29668;">_</span><span>&gt;&gt; {
+</span><span>        </span><span style="color:#ff7733;">let</span><span> buf_len </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>inner</span><span style="color:#f29668;">.</span><span>len</span><span style="color:#bfbab0cc;">;
+</span><span>        </span><span style="color:#ff7733;">if </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>cache_read </span><span style="color:#f29668;">&lt;= </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>write {
+</span><span>            </span><span style="color:#ff7733;">if </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>write </span><span style="color:#f29668;">+</span><span> len </span><span style="color:#f29668;">&lt;</span><span> buf_len {
+</span><span>                </span><span style="color:#ff7733;">let</span><span> range </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>write</span><span style="color:#f29668;">..</span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>write </span><span style="color:#f29668;">+</span><span> len</span><span style="color:#bfbab0cc;">;
+</span><span>                </span><span style="color:#ff7733;">let</span><span> watermark </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">None</span><span style="color:#bfbab0cc;">;
+</span><span>                </span><span style="font-style:italic;color:#39bae6;">Some</span><span>(WritableSlice {
+</span><span>                    range</span><span style="color:#bfbab0cc;">,
+</span><span>                    watermark</span><span style="color:#bfbab0cc;">,
+</span><span>                    writer</span><span style="color:#bfbab0cc;">: </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#bfbab0cc;">,
+</span><span>                })
+</span><span>            } </span><span style="color:#ff7733;">else </span><span>{
+</span><span>                </span><span style="color:#ff7733;">if</span><span> len </span><span style="color:#f29668;">&lt; </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>cache_read {
+</span><span>                    </span><span style="color:#ff7733;">let</span><span> range </span><span style="color:#f29668;">= </span><span style="color:#f29718;">0</span><span style="color:#f29668;">..</span><span>len</span><span style="color:#bfbab0cc;">;
+</span><span>                    </span><span style="color:#ff7733;">let</span><span> watermark </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">Some</span><span>(</span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>write)</span><span style="color:#bfbab0cc;">;
+</span><span>                    </span><span style="font-style:italic;color:#39bae6;">Some</span><span>(WritableSlice {
+</span><span>                        range</span><span style="color:#bfbab0cc;">,
+</span><span>                        watermark</span><span style="color:#bfbab0cc;">,
+</span><span>                        writer</span><span style="color:#bfbab0cc;">: </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#bfbab0cc;">,
+</span><span>                    })
+</span><span>                } </span><span style="color:#ff7733;">else </span><span>{
+</span><span>                    </span><span style="color:#ff7733;">let</span><span> read </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>inner</span><span style="color:#f29668;">.</span><span>ptrs</span><span style="color:#f29668;">.</span><span>read</span><span style="color:#f29668;">.</span><span style="color:#f07178;">lock</span><span>()</span><span style="color:#f29668;">.</span><span style="color:#f07178;">unwrap</span><span>()</span><span style="color:#bfbab0cc;">;
+</span><span>                    </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>cache_read </span><span style="color:#f29668;">= *</span><span>read</span><span style="color:#bfbab0cc;">;
+</span><span>                    </span><span style="color:#f07178;">drop</span><span>(read)</span><span style="color:#bfbab0cc;">;
+</span><span>
+</span><span>                    </span><span style="color:#ff7733;">if</span><span> len </span><span style="color:#f29668;">&lt; </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>cache_read {
+</span><span>                        </span><span style="color:#ff7733;">let</span><span> range </span><span style="color:#f29668;">= </span><span style="color:#f29718;">0</span><span style="color:#f29668;">..</span><span>len</span><span style="color:#bfbab0cc;">;
+</span><span>                        </span><span style="color:#ff7733;">let</span><span> watermark </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">Some</span><span>(</span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>write)</span><span style="color:#bfbab0cc;">;
+</span><span>                        </span><span style="font-style:italic;color:#39bae6;">Some</span><span>(WritableSlice {
+</span><span>                            range</span><span style="color:#bfbab0cc;">,
+</span><span>                            watermark</span><span style="color:#bfbab0cc;">,
+</span><span>                            writer</span><span style="color:#bfbab0cc;">: </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#bfbab0cc;">,
+</span><span>                        })
+</span><span>                    } </span><span style="color:#ff7733;">else </span><span>{
+</span><span>                        </span><span style="font-style:italic;color:#39bae6;">None
+</span><span>                    }
+</span><span>                }
+</span><span>            }
+</span><span>        } </span><span style="color:#ff7733;">else </span><span>{
+</span><span>            </span><span style="font-style:italic;color:#5c6773;">// ...
+</span><span>            </span><span style="font-style:italic;color:#5c6773;">// other cases handling omitted
+</span><span>        }
+</span><span>    }
+</span><span>}
+</span><span>
+</span><span style="color:#ff7733;">impl </span><span style="color:#59c2ff;">WritableSlice</span><span>&lt;&#39;</span><span style="color:#f29668;">_</span><span>&gt; {
+</span><span>    </span><span style="color:#ff7733;">fn </span><span style="color:#ffb454;">commit_write</span><span>(</span><span style="color:#f29718;">self</span><span>, </span><span style="color:#f29718;">len</span><span style="color:#bfbab0cc;">: </span><span style="color:#ff7733;">usize</span><span>) {
+</span><span>        </span><span style="font-style:italic;color:#5c6773;">// always lock write before lock watermark
+</span><span>        </span><span style="color:#ff7733;">let mut</span><span> lock_write </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>writer</span><span style="color:#f29668;">.</span><span>inner</span><span style="color:#f29668;">.</span><span>ptrs</span><span style="color:#f29668;">.</span><span>write</span><span style="color:#f29668;">.</span><span style="color:#f07178;">lock</span><span>()</span><span style="color:#f29668;">.</span><span style="color:#f07178;">unwrap</span><span>()</span><span style="color:#bfbab0cc;">;
+</span><span>        </span><span style="color:#ff7733;">if let </span><span style="font-style:italic;color:#39bae6;">Some</span><span>(watermark) </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>watermark {
+</span><span>            </span><span style="color:#ff7733;">let mut</span><span> lock_watermark </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>writer</span><span style="color:#f29668;">.</span><span>inner</span><span style="color:#f29668;">.</span><span>ptrs</span><span style="color:#f29668;">.</span><span>watermark</span><span style="color:#f29668;">.</span><span style="color:#f07178;">lock</span><span>()</span><span style="color:#f29668;">.</span><span style="color:#f07178;">unwrap</span><span>()</span><span style="color:#bfbab0cc;">;
+</span><span>            </span><span style="color:#f29668;">*</span><span>lock_watermark </span><span style="color:#f29668;">=</span><span> watermark</span><span style="color:#bfbab0cc;">;
+</span><span>        }
+</span><span>        </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>writer</span><span style="color:#f29668;">.</span><span>write </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>range</span><span style="color:#f29668;">.</span><span>start </span><span style="color:#f29668;">+</span><span> len</span><span style="color:#bfbab0cc;">;
+</span><span>        </span><span style="color:#f29668;">*</span><span>lock_write </span><span style="color:#f29668;">= </span><span style="font-style:italic;color:#39bae6;">self</span><span style="color:#f29668;">.</span><span>writer</span><span style="color:#f29668;">.</span><span>write</span><span style="color:#bfbab0cc;">;
+</span><span>    }
+</span><span>}
+</span></code></pre>
+<p>So we try our best to use local information as much as possible before
+trying to reach to the lock and doing locking.</p>
+<p>Let's check the result:</p>
+<p><strong>Result</strong>:</p>
+<pre style="background-color:#0f1419;color:#bfbab0;"><code><span>locking_bbq_small_read           time:   [44.760 ms 46.485 ms 48.209 ms]
+</span><span>locking_bbq_big_read             time:   [60.818 ms 62.834 ms 64.762 ms]
+</span><span>
+</span><span>locking_bbq_ptr_small_read       time:   [45.901 ms 47.905 ms 49.911 ms]
+</span><span>locking_bbq_ptr_big_read         time:   [41.289 ms 43.230 ms 45.257 ms]
+</span><span>
+</span><span>locking_bbq_ptr_local_small_read time:   [35.653 ms 38.177 ms 40.747 ms]
+</span><span>locking_bbq_ptr_local_big_read   time:   [41.296 ms 43.424 ms 45.622 ms]
+</span></code></pre>
+<p>So, a medium improvement (18%) on the small read case, 
+and similar performance on big read case.</p>
+<p>I'll end this post here, as I can't find any major way to make the current locking implementation better.
+But stay tuned, I'll continue in the next post to describe on <strong>atomic</strong>, a very important tool in
+parallel programming that can improve our implementation further.</p>
+
+    </div>
+
+    
+        <footer>
+            <hr>
+            <p>
+                
+                    Published by unrealhoang
+                
+                
+                
+                    
+                    tagged
+                    
+                        <a href="https://dev-random.io/tags/parallel-programming/">parallel-programming</a>
+                        
+                            
+                                
+                                    ,
+                                
+                            
+                        
+                    
+                        <a href="https://dev-random.io/tags/rust/">rust</a>
+                        
+                            
+                                
+                                    ,
+                                
+                            
+                        
+                    
+                        <a href="https://dev-random.io/tags/unsafe/">unsafe</a>
+                        
+                            
+                                
+                                    ,
+                                
+                            
+                        
+                    
+                        <a href="https://dev-random.io/tags/data-struture/">data-struture</a>
+                        
+                            
+                                
+                                    ,
+                                
+                            
+                        
+                    
+                        <a href="https://dev-random.io/tags/parallel/">parallel</a>
+                        
+                            
+                                
+                                    and
+                                
+                            
+                        
+                    
+                        <a href="https://dev-random.io/tags/lock-free/">lock-free</a>
+                        
+                            
+                        
+                    
+                
+            </p>
+            
+            
+        </footer>
+    
+</article>
+
+
+    </body>
+
+</html>

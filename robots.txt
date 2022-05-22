@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://dev-random.io/sitemap.xml

@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+      <meta http-equiv="X-UA-Compatible" content="IE=edge">
+      <meta http-equiv="content-type" content="text/html; charset=utf-8">
+
+      <!-- Enable responsiveness on mobile devices-->
+      <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+
+      <title>&#x2F;dev&#x2F;random</title>
+
+      
+
+      
+          <link rel="stylesheet" href="https://dev-random.io/site.css">
+      
+
+      
+      
+    </head>
+
+    <body class="hack dark main container">
+        
+    
+        
+                
+                    <header>
+                        <nav itemscope itemtype="http://schema.org/SiteNavigationElement">
+                        
+                            <a itemprop="url"
+                               class=""
+                               href="https:&#x2F;&#x2F;dev-random.io">
+                                <span itemprop="name">&#x2F;dev&#x2F;random
+                                </span></a>
+                        
+                            <a itemprop="url"
+                               class=""
+                               href="https:&#x2F;&#x2F;dev-random.io&#x2F;tags">
+                                <span itemprop="name">Tags
+                                </span></a>
+                        
+                            <a itemprop="url"
+                               class=""
+                               href="https:&#x2F;&#x2F;google.com">
+                                <span itemprop="name">Google
+                                </span></a>
+                        
+                        </nav>
+                    </header>
+                
+            
+    
+
+<article itemscope itemtype="http://schema.org/BlogPosting">
+    <header>
+        <h1 itemprop="headline">Welcome to my blog</h1>
+        <span class="muted">
+    <svg style="margin-bottom:-3px" class="i-clock" viewBox="0 0 32 32"
+         width="16" height="16" fill="none" stroke="currentcolor"
+         stroke-linecap="round" stroke-linejoin="round" stroke-width="6.25%">
+        <circle cx="16" cy="16" r="14"/>
+        <path d="M16 8 L16 16 20 20"/>
+    </svg>
+    <span>2 minute read</span>
+    <svg style="margin-bottom: -3px" class="i-edit" viewBox="0 0 32 32"
+         width="16" height="16" fill="none" stroke="currentcolor"
+         stroke-linecap="round" stroke-linejoin="round" stroke-width="6.25%">
+        <path d="M30 7 L25 2 5 22 3 29 10 27 Z M21 6 L26 11 Z M5 22 L10 27 Z"/>
+    </svg>
+
+    Published: 2022-04-30
+</span>
+    </header>
+    <div itemprop="articleBody">
+      <p>This is <code>/dev/random</code>.</p>
+<p>Some random bits from a biased quantum-based random generator, or so-called my brain.</p>
+<p>For the very first post, I'm gonna write on how I set this blog up, so that if you
+are interested, you can try it my way.</p>
+<span id="continue-reading"></span><h1 id="blog-engine">Blog Engine</h1>
+<p>As a Rust lover, I choose <a href="https://www.getzola.org/">Zola</a> as my driver, it's
+a nice <strong>written in Rust</strong> static page generator. Just like Golang, Rust can compile
+the whole project into nice single binary that can be downloaded and run everywhere.
+That is also the way I set CI to deploy this blog, but more on that later.</p>
+<h1 id="hosting">Hosting</h1>
+<p><a href="https://pages.github.com">Github Page</a> is home for us developer, and it's also free. Why not?</p>
+<h1 id="deploy">Deploy</h1>
+<p>To deploy to Github Page, I have to push the final HTMLs to <code>master</code> branch,
+so I keep the sources (blogs content, templates, configurations) in a <code>source</code> branch.
+After done writing blog posts and configuring, We build using:</p>
+<pre data-lang="bash" style="background-color:#0f1419;color:#bfbab0;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#ffb454;">zola</span><span> build
+</span></code></pre>
+<p>Now Zola will generate the nice HTMLs, minified CSSs all into <code>public</code> folder, we need to push
+that folder as the content of <code>master</code> branch, using:</p>
+<pre data-lang="bash" style="background-color:#0f1419;color:#bfbab0;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#ffb454;">git</span><span> subtree push</span><span style="color:#f29718;"> --prefix</span><span> public origin master
+</span></code></pre>
+<h1 id="ci">CI</h1>
+<p>Everytime I change something I need to run the Deployment steps again. 
+Let's be lazy and ask someone else to do that for us, introducing 
+<a href="https://travis-ci.com">TravisCI</a>.<br />
+Register your Github project with TravisCI and we are ready to roll, be careful not to register
+your project with both <code>https://travis-ci.com</code> and <code>https://travis-ci.org</code> because that was
+what I did, and it caused some confusions for me.</p>
+<p>After that, put <code>.travis.yml</code> file into your project with following content:</p>
+<pre data-lang="yaml" style="background-color:#0f1419;color:#bfbab0;" class="language-yaml "><code class="language-yaml" data-lang="yaml"><span style="color:#59c2ff;">language</span><span style="color:#bfbab0cc;">: </span><span style="color:#c2d94c;">minimal
+</span><span>
+</span><span style="color:#59c2ff;">branches</span><span style="color:#bfbab0cc;">:
+</span><span>  </span><span style="color:#59c2ff;">only</span><span style="color:#bfbab0cc;">:
+</span><span>  - </span><span style="color:#c2d94c;">source
+</span><span>
+</span><span style="color:#59c2ff;">before_script</span><span style="color:#bfbab0cc;">:
+</span><span>  </span><span style="font-style:italic;color:#5c6773;"># Download and unzip the zola executable
+</span><span>  </span><span style="font-style:italic;color:#5c6773;"># Replace the version numbers in the URL by the version you want to use
+</span><span>  - </span><span style="color:#c2d94c;">curl -s -L https://github.com/getzola/zola/releases/download/v0.15.3/zola-v0.15.3-x86_64-unknown-linux-gnu.tar.gz | sudo tar xvzf - -C /usr/local/bin
+</span><span>
+</span><span style="color:#59c2ff;">script</span><span style="color:#bfbab0cc;">:
+</span><span>  - </span><span style="color:#c2d94c;">zola build
+</span><span>
+</span><span style="color:#59c2ff;">deploy</span><span style="color:#bfbab0cc;">:
+</span><span>  </span><span style="color:#59c2ff;">provider</span><span style="color:#bfbab0cc;">: </span><span style="color:#c2d94c;">pages
+</span><span>  </span><span style="color:#59c2ff;">skip-cleanup</span><span style="color:#bfbab0cc;">: </span><span style="color:#f29718;">true
+</span><span>  </span><span style="color:#59c2ff;">github-token</span><span style="color:#bfbab0cc;">: </span><span style="color:#c2d94c;">$GITHUB_TOKEN  </span><span style="font-style:italic;color:#5c6773;"># Set in the settings page of your repository, as a secure variable
+</span><span>  </span><span style="color:#59c2ff;">keep-history</span><span style="color:#bfbab0cc;">: </span><span style="color:#f29718;">true
+</span><span>  </span><span style="color:#59c2ff;">local-dir</span><span style="color:#bfbab0cc;">: </span><span style="color:#c2d94c;">public
+</span><span>  </span><span style="color:#59c2ff;">target-branch</span><span style="color:#bfbab0cc;">: </span><span style="color:#c2d94c;">master
+</span><span>  </span><span style="color:#f29718;">on</span><span style="color:#bfbab0cc;">:
+</span><span>    </span><span style="color:#59c2ff;">branch</span><span style="color:#bfbab0cc;">: </span><span style="color:#c2d94c;">source
+</span></code></pre>
+<p>Push it on and wait for the result:</p>
+<pre data-lang="bash" style="background-color:#0f1419;color:#bfbab0;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#ffb454;">git</span><span> push origin source
+</span></code></pre>
+<p>That's all of it. Hope to see you soon.</p>
+
+    </div>
+
+    
+        <footer>
+            <hr>
+            <p>
+                
+                    Published by unrealhoang
+                
+                
+                
+                    
+                    tagged
+                    
+                        <a href="https://dev-random.io/tags/hello-world/">Hello World</a>
+                        
+                            
+                                
+                                    ,
+                                
+                            
+                        
+                    
+                        <a href="https://dev-random.io/tags/ci/">ci</a>
+                        
+                            
+                                
+                                    and
+                                
+                            
+                        
+                    
+                        <a href="https://dev-random.io/tags/static-page/">static page</a>
+                        
+                            
+                        
+                    
+                
+            </p>
+            
+            
+        </footer>
+    
+</article>
+
+
+    </body>
+
+</html>
