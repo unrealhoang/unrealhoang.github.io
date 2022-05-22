@@ -893,3 +893,7 @@ locking_bbq_ptr_local_big_read   time:   [41.296 ms 43.424 ms 45.622 ms]
 
 So, a medium improvement (18%) on the small read case, 
 and similar performance on big read case.
+
+I'll end this post here, as I can't find any major way to make the current locking implementation better.
+But stay tuned, I'll continue in the next post to describe on **atomic**, a very important tool in
+parallel programming that can improve our implementation further.
