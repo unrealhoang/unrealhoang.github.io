@@ -1,18 +1,17 @@
 +++
-title = "Lock-free programming with BipBuffer"
+title = "Parallel programming design with BipBuffer"
 date = "2022-05-09"
 [taxonomies]
-tags = ["parallel-programming", "rust", "data-struture", "parallel", "lock-free"]
+tags = ["parallel-programming", "rust", "unsafe", "data-struture", "parallel", "lock-free"]
 +++
 
-Lock-free programming is a term to refer to the programming of a part of a program
-(usually as a data structure / library) which coordinates the parallel processing of a shared data between
-multiple CPU cores without using locks.
+Coordinate the processing pattern of multiple CPU cores around shared memory data structure is one of the main
+focus of parallel programming.
+Let's explore the space, its problems and the iterative process to step by step find better data design,
+better data access pattern to get the best out of our modern, multiple CPU cores world by implementing a
+[BipBuffer](https://www.codeproject.com/Articles/3479/The-Bip-Buffer-The-Circular-Buffer-with-a-Twist)
+and try to improve it.
 
-Let's implement a [BipBuffer](https://www.codeproject.com/Articles/3479/The-Bip-Buffer-The-Circular-Buffer-with-a-Twist)
-data structure to investigate more about the problems and solutions you will face in lock-free programming.
-
-<!-- more -->
 
 # BipBuffer
 
@@ -20,6 +19,8 @@ BipBuffer is a simple single-producer single-consumer (SPSC) ring buffer data st
 to reserve a portion of the queue, write to it, and commit when the writing is done. Only after committing, that
 the data is available for the consumer. Similarly, the consumer can ask for what has been available, read it, then
 commit the read to mark that region available for producer to write again.
+
+<!-- more -->
 
 Let's visualize how does it work:
 
@@ -164,7 +165,7 @@ Similar to the ReadSlice, the WriteSlice has a `commit_write` function that dest
 
 ## Naive implementation with lock
 
-First take, let's just make an implementation that focus on satisfy our interface and works.
+First take, let's just make an implementation that focus on satisfy our interface and works.  
 **Important**: When in discovery mode, don't aim for the best possible solution even if you have some idea about it.
 Use an incremental approach, make a working version with the simplest way you can think of, it will help
 you focus on resolving the complexity of the unknown unknowns. Otherwise, the combinatory complexity
@@ -351,56 +352,544 @@ loop {
 ```
 
 So there's not much special in this implementation as we rely on a mutex
-lock to coordinate between the reader & writer. But also, its performance
-is also not as good, with the benchmark code:
+lock to coordinate between the reader & writer. Let's check the performance
+with the benchmark code:
 
 ```rust
-let (mut reader, mut writer) = S::with_len(100);
-let t = Instant::now();
-let write_thread = thread::spawn(move || {
-    for i in 0..10_000_000 {
-        let mut buf = loop {
-            if let Some(b) = writer.reserve(11) {
-                break b;
-            }
-        };
-        buf.as_mut().copy_from_slice(b"12345678901");
-        buf.commit_write(11);
+fn do_some_reading(buf: &[u8]) -> u64 {
+    let mut s = 0;
+    for i in 1..10 {
+        for b in buf {
+            s += (*b - b'0') as u64 ^ i;
+        }
     }
-});
+    s
+}
 
-let read_thread = thread::spawn(move || {
-    for i in 0..10_000_000 {
-        let buf = loop {
-            let r = reader.readable();
-            if r.as_ref().len() >= 11 {
-                break r;
-            }
-        };
-        assert_eq!(&buf.as_ref()[0..11], b"12345678901");
-        buf.commit_read(11);
-    }
-});
-write_thread.join().unwrap();
-read_thread.join().unwrap();
-println!("elapsed: {:?}", t.elapsed());
+fn test_read_write<S: SpscQueue>(buf_size: usize, iter: usize) -> u64 {
+    let (mut reader, mut writer) = S::with_len(buf_size);
+    let write_thread = thread::spawn(move || {
+        for i in 0..iter {
+            let mut buf = loop {
+                if let Some(b) = writer.reserve(11) {
+                    break b;
+                }
+            };
+            buf.as_mut().copy_from_slice(b"12345678901");
+            buf.commit_write(11);
+        }
+    });
+
+    let read_thread = thread::spawn(move || {
+        let mut sum = 0;
+        for i in 0..iter {
+            let buf = loop {
+                let r = reader.readable();
+                if r.as_ref().len() >= 11 {
+                    break r;
+                }
+            };
+            sum += do_some_reading(&buf.as_ref()[0..11]);
+            assert_eq!(&buf.as_ref()[0..11], b"12345678901");
+            buf.commit_read(11);
+        }
+        sum
+    });
+
+    write_thread.join().unwrap();
+    read_thread.join().unwrap()
+}
+
+fn bench_locking_bbq(c: &mut Criterion) {
+    c.bench_function("locking_bbq_small_read", |b| {
+        b.iter(|| {
+            let r = test_read_write::<bbq::locking::Locking>(1000, 100_000, 2);
+            black_box(r);
+        });
+    });
+    c.bench_function("locking_bbq_big_read", |b| {
+        b.iter(|| {
+            let r = test_read_write::<bbq::locking::Locking>(1000, 100_000, 50);
+            black_box(r);
+        });
+    });
+}
 ```
 
 here we have 2 thread running in parallel with 1 writer trying to write 
-10M times with 11 bytes payload and reader trying to read 11 bytes payload
-10M times.
+100K times with 11 bytes payload and reader trying to read 11 bytes payload
+100K times. We split them into 2 tests: 1 where we only do a small read over
+the data we received at Reader side, another for when we will loop over the data
+multiple times (50) to simulate some long workload at reader.
 
-**Result**: **4.5s** to finish.
+**Result**: 
+```
+locking_bbq_small_read  time:   [44.760 ms 46.485 ms 48.209 ms]
+locking_bbq_big_read    time:   [60.818 ms 62.834 ms 64.762 ms]
+```
 
+So as we expected, time spending at reader side directly increase the overall time result.
 Let's try to improve.
 
 
-## Careful lock implementation
+## Improved lock implementation
 
 With the previous implement we can make some observations: 
-* While the `read_slice` is live, the `writer` can't do anything and vice versa.
-* The `read_slice` and `write_slice` never overlap at any point in time.
+
+* While the `read_slice` is live, the `writer` can't do anything and vice versa. 
+The execution timeline of `reader` and `writer` can be visualized as follow:
+    <!--
+    @startuml
+    !theme mars
+    participant Reader
+    participant Buf
+    participant Writer
+
+    Writer -> Buf: reserve()
+
+    Buf -> Writer: lock acquired
+    activate Buf #Red
+
+    Reader -> Buf: readable()
+
+    Writer -> Writer: write
+
+    Writer -> Buf: commit_write()
+    deactivate Buf
+
+    Buf -> Reader: lock acquired
+    activate Buf #Blue
+
+    Writer -> Buf: reserve()
+
+    Reader -> Reader: read
+
+    Reader -> Buf: commit_read()
+    deactivate Buf
+
+    Buf -> Writer: lock acquired
+    activate Buf #Red
+    @enduml
+    -->
+    ![BipBuffer lock execution timeline 1](/images/bipbuffer-lock-1.png)
+
+* The `read_slice` and `write_slice` never overlap at any point in time:
+    ```
+    write_slice              [           ]
+    buf          [R R R R R R W W W W W W _ _ _ _ _ _ _]
+    read_slice   [           ]
+
+    or
+
+    write_slice                            [     ]
+    buf          [_ _ _ R R R R R R _ _ _ _ W W W _ _ _]
+    read_slice         [           ]
+
+    or if the write wrapped around:
+
+    watermark                                   v
+    write_slice  [   ]
+    buf          [W W _ _ _ _ R R R R R R _ _ _ _ _ _ _]
+    read_slice               [           ]
+    ```
+  Point is, according our rule of processing (base on read pointer, write pointer and watermark pointer),
+  we never hand out a slice of data that is accessible from both `writer` thread and `reader` thread.
+
 
 **=>** We don't have to keep the lock to protect `read_slice` and `write_slice`. We should only lock when
-trying to read or write to the pointers 
-(`read`, `write`, `watermark`).
+trying to read or write to the pointers (`read`, `write`, `watermark`). We want to restructure our structs a bit.
+Full code could be found [here](https://github.com/unrealhoang/barbequeue/blob/615ed62bb9aec21087de5af448959c769e771393/src/lock_ptr.rs)
+
+```rust
+struct BufPtrs {
+    read: usize,
+    write: usize,
+    last: usize,
+}
+
+struct BipBuf {
+    owned: Box<[u8]>,
+    // length of the owned buffer
+    len: usize,
+    // pointer to the beginning of the owned buffer
+    buf: *mut u8,
+    ptrs: Mutex<BufPtrs>,
+}
+
+pub struct Reader {
+    inner: Arc<BipBuf>,
+}
+
+pub struct Writer {
+    inner: Arc<BipBuf>,
+}
+
+pub struct ReadSlice<'a> {
+    reader: &'a mut Reader,
+    range: Range<usize>,
+}
+
+pub struct WriteSlice<'a> {
+    writer: &'a mut Writer,
+    range: Range<usize>,
+    watermark: Option<usize>,
+}
+```
+
+instead of Mutex wrapping the buffer before, now we only wrap/protect the pointers. But in order to split the data
+buffer into disjointed mutable slices, similar to
+[split_at_mut](https://doc.rust-lang.org/std/primitive.slice.html#method.split_at_mut) with custom split logic, we
+must venture to the scary `unsafe` world to use the pointer and let Rust know, because there's no safe way? (if you can, please let me know)
+to communicate the custom access guarantee to Rust. 
+Let's change the logic code to accommodate the new structure.
+
+```rust
+impl QueueReader {
+    fn readable(&mut self) -> ReadSlice<'_> {
+        let lock = self.inner.ptrs.lock().unwrap();
+        if lock.read <= lock.write {
+            let range = lock.read..lock.write;
+            drop(lock);
+            ReadSlice {
+                reader: self,
+                range,
+            }
+        } else {
+            // ...
+            // other cases handling omitted
+        }
+    }
+}
+
+impl ReadSlice<'_> {
+    fn commit_read(mut self, len: usize) {
+        if len > self.range.end - self.range.start {
+            panic!("commit read larger than readable range");
+        }
+        let mut lock = self.reader.inner.ptrs.lock().unwrap();
+        lock.read = self.range.start + len;
+    }
+}
+```
+
+So now we only lock, read the pointers, then release the lock, on commit, lock again to update the pointers, 
+then release, apply the same changes to writer:
+
+```rust
+impl Writer {
+    fn reserve(&mut self, len: usize) -> Option<WriteSlice<'_>> {
+        let lock = self.inner.ptrs.lock().unwrap();
+        let buf_len = self.inner.len;
+        if lock.read <= lock.write {
+            if lock.write + len < buf_len {
+                let range = lock.write..lock.write + len;
+                let watermark = None;
+                drop(lock);
+                Some(WriteSlice {
+                    range,
+                    watermark,
+                    writer: self,
+                })
+            } else {
+                // ...
+                // other cases handling omitted
+            }
+        } else {
+            // ...
+            // other cases handling omitted
+        }
+    }
+}
+
+impl WriteSlice<'_> {
+    fn commit_write(self, len: usize) {
+        let mut lock = self.writer.inner.ptrs.lock().unwrap();
+        lock.write = self.range.start + len;
+        if let Some(last) = self.watermark {
+            lock.last = last;
+        }
+    }
+}
+```
+
+Done, now, observing the new benchmark result:
+
+**Result**:
+```
+locking_bbq_small_read     time:   [44.760 ms 46.485 ms 48.209 ms]
+locking_bbq_big_read       time:   [60.818 ms 62.834 ms 64.762 ms]
+
+locking_bbq_ptr_small_read time:   [45.901 ms 47.905 ms 49.911 ms]
+locking_bbq_ptr_big_read   time:   [41.289 ms 43.230 ms 45.257 ms]
+```
+
+The result for small read is practically not change at all, or even a little worse, because
+the process for 1 cycle become: lock -> read ptr -> release -> read data -> lock -> update ptr -> release.
+The extra locks & releases causing more harm than good in the small read case.
+But we see an obvious improvement over the big read case, where not only the read time doesn't impact the 
+result time negatively, it performs better than the small read time, this is because more time spent reading
+means less contention on the lock with Writer side. 
+
+So, on the big read case, we have improved the time by 50%.
+Let's review the changed execution timeline:  
+<!--
+@startuml
+!theme mars
+participant Reader
+participant Buf
+participant Writer
+
+Writer -> Buf: reserve()
+
+Buf -> Writer: lock acquired
+activate Buf #Red
+
+Reader -> Buf: readable()
+
+Writer -> Buf: read pointers
+deactivate Buf
+Buf -> Writer: write_slice
+
+Buf -> Reader: lock acquired
+activate Buf #Blue
+Reader -> Buf: read pointers
+deactivate Buf
+
+par in parallel
+Buf -> Reader: read_slice
+
+Writer -> Writer: write
+Reader -> Reader: read
+
+Writer -> Buf: commit_write()
+end
+
+Buf -> Writer: lock acquired
+activate Buf #Red
+
+Reader -> Buf: commit_read()
+Writer -> Buf: update pointers
+deactivate Buf
+
+Buf -> Reader: lock acquired
+activate Buf #Blue
+Reader -> Buf: update pointers
+deactivate Buf
+
+Writer -> Buf: reserve()
+
+Buf -> Writer: lock acquired
+activate Buf #Red
+@enduml
+-->
+![BipBuffer lock execution timeline 2](/images/bipbuffer-lock-2.png)
+
+We can see that the locked period of the buffer is smaller, allowing reader and writer to have
+a lot more time doing execution in parallel instead of waiting for each other.
+In the real usage of this library, when `read` and `write` portion is doing more (and takes more time),
+the different between the first implementation and this one will be even more drastic.
+
+## Second improvement on locking implementation
+
+Is there any room for improvement? Let's zoom into the part of the code where the lock is acquired, we see:
+
+* `readable()` and `reserve()` only read from the pointers, `commit_read()` and `commit_write()` only write
+to the pointers.
+* We could split the lock to lock each of the pointer separately, this is possible because either:
+    * The `read` pointer got updated (by `commit_read()` function).
+    * The `write` pointer got updated (by `commit_write()` function), or
+    * The `write` and `watermark` pointer got updated at the same time (by `commit_write()` function).
+    In this case, let's review the guarantee that we actually require for them by considering the cases
+    where they got updated separately:
+        * `write` got updated (wrapped around) and `watermark` is not:
+        ```
+        watermark
+        write             v
+        buf          [W W _ _ _ _ R R R R R R _ _ _ _ _ _ _]
+        read                                  ^
+        ```
+        This is obviously not good, since reader see the `write` pointer wrapped around but dont see the
+        position of the watermark to read to.
+        * `watermark` got updated and `write` pointer is not:
+        ```
+        watermark                                       v
+        write                                           v
+        buf          [W W _ _ _ _ R R R R R R _ _ _ _ _ _ _]
+        read                                  ^
+        ```
+        This is ok, as reader side can still get the readable slice from the `read` pointer to the `write`
+        pointer.  
+        So the invariant here is: 
+        **`watermark` must be seen updated before `write` pointer wrap around effect is seen.**
+
+
+* Reader knows the position of `read` pointer entirely (since it's the one who write them) => instead
+of claiming lock to read the `read` pointer, it could keep a local value of the `read` pointer and use it.
+* Similarly, Writer knows the position of `write` pointer => no lock required for reading.
+* Also, we could cache the `read` pointer for Writer once we load it, same for `write` and `watermark` pointer
+for Reader. Only load locked pointers when absolutely need it.
+
+With all that, let's try to apply it:
+
+```rust
+struct BufPtrs {
+    read: Mutex<usize>,
+    write: Mutex<usize>,
+    watermark: Mutex<usize>,
+}
+
+struct BipBuf {
+    owned: Box<[u8]>,
+    len: usize,
+    buf: *mut u8,
+    ptrs: BufPtrs,
+}
+
+pub struct Reader {
+    inner: Arc<BipBuf>,
+    read: usize,
+}
+
+pub struct Writer {
+    inner: Arc<BipBuf>,
+    write: usize,
+    cache_read: usize,
+}
+
+pub struct ReadableSlice<'a> {
+    reader: &'a mut Reader,
+    range: Range<usize>,
+}
+
+pub struct WritableSlice<'a> {
+    writer: &'a mut Writer,
+    range: Range<usize>,
+    watermark: Option<usize>,
+}
+```
+
+the changed implementation:
+
+```rust
+impl Reader {
+    fn readable(&mut self) -> ReadableSlice<'_> {
+        // always lock write before lock watermark
+        let lock_write = self.inner.ptrs.write.lock().unwrap();
+        if self.read <= *lock_write {
+            let range = self.read..*lock_write;
+            drop(lock_write);
+            ReadableSlice {
+                reader: self,
+                range,
+            }
+        } else {
+            let lock_watermark = self.inner.ptrs.watermark.lock().unwrap();
+            // read > write -> wrapped around, readable from read to watermark
+            if self.read == *lock_watermark {
+                let range = 0..*lock_write;
+                drop(lock_watermark);
+                drop(lock_write);
+                ReadableSlice {
+                    reader: self,
+                    range,
+                }
+            } else {
+                // ...
+                // other cases handling omitted
+            }
+        }
+    }
+}
+
+impl ReadableSlice<'_> {
+    fn commit_read(mut self, len: usize) {
+        let mut lock = self.reader.inner.ptrs.read.lock().unwrap();
+        self.reader.read = self.range.start + len;
+        *lock = self.reader.read;
+    }
+}
+```
+
+So Reader doesn't have to lock `read` ptr on `readable`, only lock to write
+it on `commit_read()`.
+
+```rust
+impl Writer {
+    fn reserve(&mut self, len: usize) -> Option<WritableSlice<'_>> {
+        let buf_len = self.inner.len;
+        if self.cache_read <= self.write {
+            if self.write + len < buf_len {
+                let range = self.write..self.write + len;
+                let watermark = None;
+                Some(WritableSlice {
+                    range,
+                    watermark,
+                    writer: self,
+                })
+            } else {
+                if len < self.cache_read {
+                    let range = 0..len;
+                    let watermark = Some(self.write);
+                    Some(WritableSlice {
+                        range,
+                        watermark,
+                        writer: self,
+                    })
+                } else {
+                    let read = self.inner.ptrs.read.lock().unwrap();
+                    self.cache_read = *read;
+                    drop(read);
+
+                    if len < self.cache_read {
+                        let range = 0..len;
+                        let watermark = Some(self.write);
+                        Some(WritableSlice {
+                            range,
+                            watermark,
+                            writer: self,
+                        })
+                    } else {
+                        None
+                    }
+                }
+            }
+        } else {
+            // ...
+            // other cases handling omitted
+        }
+    }
+}
+
+impl WritableSlice<'_> {
+    fn commit_write(self, len: usize) {
+        // always lock write before lock watermark
+        let mut lock_write = self.writer.inner.ptrs.write.lock().unwrap();
+        if let Some(watermark) = self.watermark {
+            let mut lock_watermark = self.writer.inner.ptrs.watermark.lock().unwrap();
+            *lock_watermark = watermark;
+        }
+        self.writer.write = self.range.start + len;
+        *lock_write = self.writer.write;
+    }
+}
+```
+
+So we try our best to use local information as much as possible before
+trying to reach to the lock and doing locking.
+
+Let's check the result:
+
+**Result**:
+```
+locking_bbq_small_read           time:   [44.760 ms 46.485 ms 48.209 ms]
+locking_bbq_big_read             time:   [60.818 ms 62.834 ms 64.762 ms]
+
+locking_bbq_ptr_small_read       time:   [45.901 ms 47.905 ms 49.911 ms]
+locking_bbq_ptr_big_read         time:   [41.289 ms 43.230 ms 45.257 ms]
+
+locking_bbq_ptr_local_small_read time:   [35.653 ms 38.177 ms 40.747 ms]
+locking_bbq_ptr_local_big_read   time:   [41.296 ms 43.424 ms 45.622 ms]
+```
+
+So, a medium improvement (18%) on the small read case, 
+and similar performance on big read case.
